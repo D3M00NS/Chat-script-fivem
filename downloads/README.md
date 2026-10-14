@@ -1,3 +1,19 @@
+# Zyon v3 — prévia independente para FiveM b3258
+
+[Baixar o pacote completo](ZyonMenu-v3-standalone-completo.zip) · [Pacote compacto](ZyonMenu-v3-standalone-compacto.zip)
+
+O pacote completo inclui o executável Windows x64, runtime e código-fonte. Extraia o ZIP para uma pasta nova, feche a versão antiga e abra `ZyonMenu.exe`. Confirme o título **Zyon v3 — FiveM b3258 / standalone**.
+
+Esta prévia usa detecção direta de `FiveM_b3258_GTAProcess.exe`, sem recurso de servidor, grupo admin, chave manual ou porta TCP local. Aim, ESP e GodMode podem ser preparados antes da validação do personagem. A aba da engrenagem inclui **Salvar diagnóstico** para investigar o cliente efetivamente carregado.
+
+**Reviver, nomes/IDs da cidade, identidade Steam, Silent Aim, Noclip, Freeze Ammo e oclusão permanecem indisponíveis.** O código compilou e passou sete suítes portáveis com 101 assertivas, cinco verificações de mutex entre processos e três comparações de bytes com os accessors recebidos. A janela Windows, o acesso ao processo e os efeitos em uma sessão real de FiveM não foram executados neste ambiente Linux.
+
+O pacote compacto exige **.NET Desktop Runtime 8 x64**. Consulte `LEIA-ME.txt` e `codigo-fonte/README.md` dentro dos pacotes para a implementação atual e seus limites. Nenhum dos DLLs ou executáveis privados enviados para análise está incluído.
+
+## Pacotes anteriores
+
+Os pacotes abaixo são da versão administrativa 2 e exigem um recurso instalado no servidor.
+
 # ZyonMenu v2 — arquivos para download
 
 Aplicativo externo Windows 10 x64 com pareamento automático. A janela não pede chave de acesso nem URL.
