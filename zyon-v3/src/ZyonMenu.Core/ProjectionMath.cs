@@ -32,7 +32,7 @@ public static class ProjectionMath
     /// <summary>Transforms a local bone using the ped's row-major affine matrix, including row-four translation.</summary>
     public static Vector3 TransformBone(Vector3 local, Matrix4x4 ped)
     {
-        if (!IsFinite(local) || !IsFinite(ped))
+        if (!IsFinite(local) || !IsFiniteAffineTransform(ped))
             throw new ArgumentException("A posição e a matriz do osso precisam ser finitas.");
         var transformed = Vector3.Transform(local, ped);
         if (!IsFinite(transformed))
@@ -68,6 +68,14 @@ public static class ProjectionMath
 
     private static bool IsFinite(Vector2 value) => float.IsFinite(value.X) && float.IsFinite(value.Y);
     private static bool IsFinite(Vector3 value) => float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);
+    // Vector3.Transform uses the XYZ basis and row-four translation. The last
+    // column is unused affine padding and need not contain finite values.
+    private static bool IsFiniteAffineTransform(Matrix4x4 value) =>
+        float.IsFinite(value.M11) && float.IsFinite(value.M12) && float.IsFinite(value.M13) &&
+        float.IsFinite(value.M21) && float.IsFinite(value.M22) && float.IsFinite(value.M23) &&
+        float.IsFinite(value.M31) && float.IsFinite(value.M32) && float.IsFinite(value.M33) &&
+        float.IsFinite(value.M41) && float.IsFinite(value.M42) && float.IsFinite(value.M43);
+
     private static bool IsFinite(Matrix4x4 value) =>
         float.IsFinite(value.M11) && float.IsFinite(value.M12) && float.IsFinite(value.M13) && float.IsFinite(value.M14) &&
         float.IsFinite(value.M21) && float.IsFinite(value.M22) && float.IsFinite(value.M23) && float.IsFinite(value.M24) &&

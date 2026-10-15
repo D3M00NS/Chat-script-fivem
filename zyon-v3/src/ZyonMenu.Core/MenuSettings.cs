@@ -89,6 +89,15 @@ public sealed class ServerStatus
     public string[] Capabilities { get; set; } = [];
     public string MedicalProvider { get; set; } = "";
     public string MedicalMessage { get; set; } = "";
+    public List<FeatureStatus> FeatureStates { get; set; } = [];
+}
+
+public sealed class FeatureStatus
+{
+    public string Name { get; set; } = "";
+    public string State { get; set; } = "";
+    public string Message { get; set; } = "";
+    public DateTimeOffset? ObservedUtc { get; set; }
 }
 
 public sealed class MenuEvents

@@ -8,5 +8,9 @@
   <ItemGroup>
     <ProjectReference Include="../../src/ZyonMenu.Core/ZyonMenu.Core.csproj" />
     <Compile Include="../../src/ZyonMenu.Windows/StandaloneUiPolicy.cs" Link="StandaloneUiPolicy.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/StandaloneInstance.cs" Link="StandaloneInstance.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/AppIdentity.cs" Link="AppIdentity.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/ExternalReadback.cs" Link="ExternalReadback.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/LocalRuntimeTelemetry.cs" Link="LocalRuntimeTelemetry.cs" />
   </ItemGroup>
 </Project>

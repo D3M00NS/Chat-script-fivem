@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.Principal;
 using System.Text;
+using ZyonMenu.Core;
 
 namespace ZyonMenu.Windows;
 
@@ -49,42 +50,68 @@ internal sealed class StandaloneInstance : IDisposable
     }
 
     [SupportedOSPlatform("windows")]
-    public static bool ActivateExistingWindow()
+    public static ExistingInstanceAction HandleExistingInstance(bool requestAdministration,
+        out string description)
     {
-        // The owner may still be creating its window; bound startup retries to one second.
+        description = "Outra instância do menu ainda está inicializando ou não pôde ser identificada.";
         var elapsed = Stopwatch.StartNew();
         while (elapsed.ElapsedMilliseconds < 1000)
         {
-            nint existing = 0;
-            EnumWindows((window, _) =>
+            nint existing = FindMenuWindow();
+            if (existing == 0)
             {
-                var length = GetWindowTextLength(window);
-                if (length != WindowTitle.Length && length != AdminWindowTitle.Length) return true;
-                var title = new StringBuilder(length + 1);
-                if (GetWindowText(window, title, title.Capacity) > 0 &&
-                    (title.ToString() == WindowTitle || title.ToString() == AdminWindowTitle))
-                {
-                    // Prefer the active mode, but retain a hidden window so reopening also works after Insert.
-                    if (existing == 0) existing = window;
-                    if (IsWindowVisible(window))
-                    {
-                        existing = window;
-                        return false;
-                    }
-                }
-                return true;
-            }, 0);
-            if (existing != 0)
+                Thread.Sleep(50);
+                continue;
+            }
+            var title = ReadWindowTitle(existing);
+            GetWindowThreadProcessId(existing, out var owner);
+            // Cross-published apphosts can retain the .NET runtime's PE FileVersion.
+            // The window title comes from the running assembly's AppIdentity instead.
+            ExistingInstancePolicy.TryParseWindowTitle(title, out var existingVersion, out var administration);
+            var action = ExistingInstancePolicy.Decide(AppIdentity.Version, existingVersion,
+                requestAdministration, administration);
+            description = existingVersion is null
+                ? "Existe uma cópia com identificação antiga ou sem versão verificável aberta."
+                : $"O menu aberto é da versão {existingVersion.Major}.{existingVersion.Minor}.{existingVersion.Build}. " +
+                    $"Você está tentando abrir a versão {AppIdentity.DisplayVersion}.";
+            if (action == ExistingInstanceAction.Activate)
             {
-                GetWindowThreadProcessId(existing, out var owner);
                 AllowSetForegroundWindow(owner);
                 ShowWindowAsync(existing, IsIconic(existing) ? 9 : 5);
                 SetForegroundWindow(existing);
-                return true;
             }
-            Thread.Sleep(50);
+            return action;
         }
-        return false;
+        return ExistingInstanceAction.Unidentified;
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static nint FindMenuWindow()
+    {
+        nint fallback = 0;
+        EnumWindows((window, parameter) =>
+        {
+            var title = ReadWindowTitle(window);
+            bool matches = title == WindowTitle || title == AdminWindowTitle ||
+                ExistingInstancePolicy.TryParseWindowTitle(title, out _, out _);
+            if (!matches) return true;
+            if (fallback == 0) fallback = window;
+            if (IsWindowVisible(window))
+            {
+                fallback = window;
+                return false;
+            }
+            return true;
+        }, 0);
+        return fallback;
+    }
+
+    private static string ReadWindowTitle(nint window)
+    {
+        int length = GetWindowTextLength(window);
+        if (length <= 0 || length > 512) return "";
+        var text = new StringBuilder(length + 1);
+        return GetWindowText(window, text, text.Capacity) > 0 ? text.ToString() : "";
     }
 
     public void Dispose()

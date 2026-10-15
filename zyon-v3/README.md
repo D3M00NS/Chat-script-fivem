@@ -1,41 +1,37 @@
-# Zyon 3.1.1 — standalone, ESX e QBCore
+# Zyon 3.1.2 — executável externo para FiveM b3258
 
-Fonte extraída do pacote v3 da branch `download-zyon-menu-v1`, com correções de atualização do ESP e integração administrativa opcional reaproveitada da v2. O modo externo continua direcionado a `FiveM_b3258_GTAProcess.exe`; o modo administrativo usa o recurso do seu próprio servidor.
+Esta versão abre diretamente no modo externo, sem instalar recurso no servidor. O perfil é destinado a `FiveM_b3258_GTAProcess.exe` no Windows x64.
 
-## Abrir
+Extraia o [pacote completo](../downloads/ZyonMenu-v3.1.2-completo.zip) em uma pasta nova, feche o menu anterior e abra `ZyonMenu.exe`. Confirme **Zyon 3.1.2** no título. O runtime está incluído; o pacote compacto exige .NET Desktop Runtime 8 x64.
 
-No pacote completo, extraia tudo para uma pasta nova, feche a versão anterior e abra `ZyonMenu.exe`. O runtime está incluído. O pacote compacto requer .NET Desktop Runtime 8 x64.
+## Correções desta versão
 
-Para reviver, suicídio, noclip/voar, invisibilidade, voz recebida e ADMs no ESP, instale `fivem/zyon_admin_menu` conforme o [README do recurso](fivem/zyon_admin_menu/README.md). Com o menu fechado, abra `Abrir-modo-administrativo.cmd` ou execute `ZyonMenu.exe --admin`. Se a janela externa estiver aberta, use **Abrir modo administrativo** na aba Noclip/Conexão. Não é necessário inserir chave. Os efeitos externos são desligados antes de abrir a janela administrativa, evitando dois controladores do mesmo estado.
+- Uma cópia nova não reativa silenciosamente uma versão antiga. O aviso identifica as versões e pede que a janela anterior seja fechada; o mutex continua impedindo dois controladores simultâneos.
+- O cálculo dos ossos usa os 12 coeficientes necessários da matriz do personagem. Valores inválidos nos quatro campos de padding não descartam mais todos os personagens. A validação da matriz de projeção continua rigorosa.
+- **Situação das funções** mostra as pré-condições e falhas de cada função. **Salvar diagnóstico** registra cadeias de leitura, câmera, armas, projeção e resultados das escritas. Configuração recebida e leitura confirmada não são anunciadas como efeito comprovado no jogo.
+- A janela se ajusta à área de trabalho e permite rolagem nas abas; a mudança ainda precisa ser conferida no Windows com escala de tela diferente.
 
-## Correções
+## O que permanece pendente
 
-- Aba Noclip dedicada com velocidade de 1–50 m/s e controles de voo.
-- Movimento nativo atualizado por quadro e sem passos extras ao receber um ajuste de velocidade.
-- ESP externo em thread STA própria, independente da interface; coleta e desenho usam intervalos de 16 ms, sujeitos à carga e ao agendamento do Windows. Quadros antigos são descartados e ossos parcialmente projetados deixam de ocultar todo o personagem.
-- A suavização da mira usa o tempo decorrido, preservando sua resposta ao mudar a frequência de coleta. Configurações não são serializadas por quadro; sliders enviam atualizações agrupadas em 60 ms, sem esperar que o usuário solte o controle.
-- ESP administrativo desenhado por quadro; ADMs identificados pela ACE do servidor, com rótulo próprio mesmo com nomes desligados.
-- Reviver e suicídio com confirmação separada; invisibilidade e voz recebida com restauração ao encerrar os efeitos.
-- Reviver com seleção automática standalone/ESX/QBCore por servidor: utiliza o fluxo médico oficial, confirma os estados disponíveis e informa integração ausente em vez de anunciar sucesso apenas pela vida nativa.
-- `Directory.Build.props` incluído: sua ausência no ZIP original impedia compilar Core/testes sem parâmetros externos.
+O backend externo contém Aim, ESP, GodMode e modificadores de recoil/spread condicionados às assinaturas encontradas. A correção de padding pode recuperar personagens antes descartados, mas não comprova que todas as leituras do seu FiveM estão corretas.
 
-## Limites
+**Silent Aim, reviver, suicídio, noclip/voar, invisibilidade, silenciar, ADMs/nomes no ESP, Freeze Ammo e teste de visibilidade não têm implementação externa funcional neste projeto.** Seus controles permanecem indisponíveis. Esta atualização não afirma resolver essas funções.
 
-Silent Aim continua indisponível. Não há integração validada de redirecionamento de projéteis, e alterar vida não foi usado como substituto de ressurreição. O modo externo sozinho também não executa os natives de noclip/revive, identifica ADMs ou lê nomes/IDs da cidade. Use o recurso administrativo para essas funções.
+Para investigar Aim/ESP/armas, reproduza a falha com o FiveM aberto, volte ao menu e clique em **Salvar diagnóstico**. Envie o JSON resultante. Ele permite localizar a falha no perfil efetivamente carregado, sem trocar endereços por tentativa. Veja [o diagnóstico externo](docs/external-3.1.2.md).
 
-Reviver seleciona o fluxo nativo no standalone, `esx_death` no ESX atual, o evento/callback oficial no ESX legado compatível ou `qb-ambulancejob` no QBCore. Hospitais personalizados e versões ESX sem essa API exigem adaptação; consulte [integração médica](docs/medical-integration.md). A identificação ADM usa `zyon.modmenu`, não tenta adivinhar cargos. Silenciar refere-se ao áudio de voz recebido localmente. Apenas entidades em streaming entram no ESP.
-
-Este ambiente Linux compila o aplicativo Windows e executa testes portáveis/mocks. A janela WinForms, acesso ao processo e comportamento real no FiveM não foram executados aqui. Não interprete compilação ou testes com mocks como validação dentro do jogo.
+Compilação e testes portáveis foram executados no Linux. A janela WinForms, acesso Win32 ao jogo e efeitos no FiveM real não foram executados aqui. Consulte a [validação](docs/VALIDACAO.md).
 
 ## Desenvolvimento
 
-Use o SDK .NET 8.0.426, Lua 5.4 e Node.js. No Windows:
+Use SDK .NET 8.0.426, Lua 5.4 e Node.js. No Windows:
 
 ```powershell
 powershell -File scripts/build.ps1
 powershell -File scripts/test.ps1
 ```
 
-No Linux, `bash scripts/test.sh`. É possível indicar executáveis por `ZYON_DOTNET_COMMAND`, `ZYON_LUA_COMMAND` e `ZYON_NODE_COMMAND`. Os testes executam geometria/timing/política de UI, HTTP e pareamento reais em loopback, contratos Lua e NUI.
+No Linux, `bash scripts/test.sh`. Os executáveis podem ser indicados por `ZYON_DOTNET_COMMAND`, `ZYON_LUA_COMMAND` e `ZYON_NODE_COMMAND`. Os testes cobrem geometria, política da interface, mutex entre processos, diagnósticos, HTTP e contratos da integração administrativa anterior.
 
-Para empacotar as duas publicações, execute `python release/pack_release.py`. Configure `ZYON_DOTNET_ROOT` para o SDK usado e `NUGET_PACKAGES` para o cache das dependências. O ZIP inclui executáveis produzidos localmente, fontes, recurso administrativo e licenças do runtime; não inclui DLLs privadas recebidas para análise.
+`python release/pack_release.py` empacota as publicações de `dist/win-x64` e `dist/compacto`. Use `ZYON_DOTNET_ROOT` e `NUGET_PACKAGES` para localizar as licenças do runtime. Os pacotes incluem fontes e licenças; não incluem DLLs privadas recebidas para análise.
+
+O código da integração administrativa 3.1.1 foi preservado em `fivem/` para compatibilidade e consulta. Ele não participa do funcionamento externo nem é exigido para abrir esta versão.

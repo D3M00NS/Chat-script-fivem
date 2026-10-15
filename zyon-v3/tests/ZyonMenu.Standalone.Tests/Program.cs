@@ -3,6 +3,8 @@ using System.Numerics;
 using ZyonMenu.Core;
 using ZyonMenu.Standalone.Tests;
 
+if (ExistingInstanceChecks.TryHandleChild(args, out var childExitCode)) return childExitCode;
+
 var assertions = 0;
 var suites = new List<(string Name, Action Body)>
 {
@@ -13,7 +15,10 @@ var suites = new List<(string Name, Action Body)>
     ("byte signature parser validation", PatternParser),
     ("unique, absent, ambiguous and overlapping matches", PatternMatches),
     ("standalone UI capability and lifecycle policy", () => assertions += UiPolicyChecks.Run()),
-    ("overlay freshness and partial actor geometry", () => assertions += OverlayChecks.Run())
+    ("overlay freshness and partial actor geometry", () => assertions += OverlayChecks.Run()),
+    ("bone transform ignores unused padding without weakening projection", () => assertions += AffinePaddingChecks.Run()),
+    ("startup version policy and process mutex exclusion", () => assertions += ExistingInstanceChecks.Run()),
+    ("external observation readback and diagnostic snapshots", () => assertions += ExternalObservationChecks.Run())
 };
 
 var failures = 0;

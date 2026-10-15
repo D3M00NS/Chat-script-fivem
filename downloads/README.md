@@ -1,3 +1,17 @@
+# Zyon 3.1.2 — executável externo
+
+[Pacote completo com runtime](ZyonMenu-v3.1.2-completo.zip) · [Pacote compacto](ZyonMenu-v3.1.2-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.1.2-packages.json)
+
+Extraia para uma pasta nova, feche a cópia anterior e abra `ZyonMenu.exe`. Confirme **Zyon 3.1.2** no título. Esta versão não exige instalar nada no servidor.
+
+Corrige a abertura que reativava uma versão antiga e o cálculo de ossos que rejeitava padding inválido. Acrescenta estado e diagnóstico por função. **Silent Aim, reviver, noclip/voar, suicídio, invisibilidade, silenciar, ADMs/nomes e Freeze Ammo externos continuam indisponíveis.**
+
+Para investigar Aim/ESP/armas, reproduza a falha com o FiveM aberto e envie o JSON de **Salvar diagnóstico**. Compilação e testes automatizados passaram; comportamento real no Windows/FiveM não foi executado aqui. Consulte [validação](../zyon-v3/docs/VALIDACAO.md) e [limites](../zyon-v3/README.md).
+
+## Histórico de pacotes
+
+As versões abaixo foram publicadas anteriormente e possuem requisitos diferentes.
+
 # Zyon 3.1.1 — reviver em standalone, ESX e QBCore
 
 [Pacote completo com runtime](ZyonMenu-v3.1.1-completo.zip) · [Pacote compacto](ZyonMenu-v3.1.1-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.1.1-packages.json) · [Integração médica](../zyon-v3/docs/medical-integration.md)

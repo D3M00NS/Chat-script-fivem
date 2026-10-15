@@ -25,7 +25,8 @@ internal sealed class MainForm : Form
     private readonly Button _connect = Theme.Button("Detectar FiveM", true);
     private readonly Button _disconnect = Theme.Button("Desconectar");
     private readonly Button _saveDiagnostic = Theme.Button("Salvar diagnóstico");
-    private readonly Button _revive = Theme.Button("Reviver personagem", true);
+    private readonly Button _revive = Theme.Button("Reviver indisponível");
+    private readonly DataGridView _featureStates = new();
     private readonly LocalGameSession _client = new();
     private readonly StandaloneUiPolicy _policy = new();
     private readonly HashSet<string> _knownCapabilities = new(StringComparer.OrdinalIgnoreCase);
@@ -42,7 +43,6 @@ internal sealed class MainForm : Form
     private bool _synchronizing;
     private bool _hotkeyRegistered;
     private bool _capabilitiesKnown;
-    private bool _switchingMode;
     private long _changeVersion;
     private long _connectionGeneration;
     private long _eventsCursor;
@@ -59,7 +59,7 @@ internal sealed class MainForm : Form
 
     public MainForm()
     {
-        Text = "Zyon v3 — FiveM b3258 / standalone";
+        Text = AppIdentity.StandaloneTitle;
         Size = new Size(1100, 790);
         MinimumSize = new Size(950, 660);
         StartPosition = FormStartPosition.CenterScreen;
@@ -85,13 +85,17 @@ internal sealed class MainForm : Form
         _saveDiagnostic.Click += (_, _) => SaveDiagnostic();
         _revive.Click += async (_, _) => await ReviveAsync();
         FormClosing += OnFormClosing;
-        Shown += async (_, _) => await StartDetectionAsync();
+        Shown += async (_, _) =>
+        {
+            FitToWorkingArea();
+            await StartDetectionAsync();
+        };
         UpdateAvailability();
     }
 
     private void BuildShell()
     {
-        var sidebar = new Panel { Dock = DockStyle.Left, Width = 86, BackColor = Theme.Sidebar, Padding = new Padding(10, 18, 10, 12) };
+        var sidebar = new Panel { Dock = DockStyle.Left, Width = 104, BackColor = Theme.Sidebar, Padding = new Padding(10, 18, 10, 12) };
         var mark = new Label
         {
             Text = "Z",
@@ -107,6 +111,7 @@ internal sealed class MainForm : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.TopDown,
             WrapContents = false,
+            AutoScroll = true,
             Padding = new Padding(0, 22, 0, 0),
             BackColor = Theme.Sidebar
         };
@@ -137,8 +142,8 @@ internal sealed class MainForm : Form
         sidebar.Controls.Add(mark);
 
         var main = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background };
-        var header = new Panel { Dock = DockStyle.Top, Height = 84, Padding = new Padding(26, 15, 26, 8), BackColor = Theme.Background };
-        var title = Theme.Label("ZYON  /  MENU EXTERNO");
+        var header = new Panel { Dock = DockStyle.Top, Height = 124, Padding = new Padding(26, 15, 26, 8), BackColor = Theme.Background };
+        var title = Theme.Label($"ZYON {AppIdentity.DisplayVersion}  /  STANDALONE");
         title.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
         title.Location = new Point(26, 16);
         var subtitle = Theme.Label("FiveM b3258 · processo local · configuração independente", true);
@@ -160,7 +165,13 @@ internal sealed class MainForm : Form
             _hotkeyLabel.Location = new Point(header.Width - 316, 44);
         };
         _tooltips.SetToolTip(_hotkeyLabel, "Insert oculta ou mostra o menu. A sessão permanece conectada enquanto a janela está oculta.");
-        header.Controls.AddRange(new Control[] { title, subtitle, _connectionLabel, _hotkeyLabel });
+        _saveDiagnostic.Location = new Point(26, 78);
+        _saveDiagnostic.Width = 185;
+        var functionStatus = Theme.Button("Situação das funções");
+        functionStatus.Location = new Point(226, 78);
+        functionStatus.Width = 185;
+        functionStatus.Click += (_, _) => ShowPage("Connection");
+        header.Controls.AddRange(new Control[] { title, subtitle, _connectionLabel, _hotkeyLabel, _saveDiagnostic, functionStatus });
 
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(26, 5, 24, 5), BackColor = Theme.Sidebar };
         _revisionLabel.Location = new Point(26, 8);
@@ -206,13 +217,12 @@ internal sealed class MainForm : Form
     {
         var page = NewPage("Aim");
         page.Controls.Add(AimCard("Aimbot Aim", _settings.Aim, "aim"));
-        var silentCard = AimCard("Silent Aim", _settings.Silent, "silent");
-        silentCard.Height = 485;
-        AddNote(silentCard, "Redirecionamento de projéteis não implementado nesta integração.", 424, 360);
+        var silentCard = Card("Silent Aim · indisponível", 408, 188);
+        AddNote(silentCard, "Silent Aim externo ainda não implementado. Esta versão não altera a direção dos tiros com essa função. Não há ativação disponível neste perfil.", 62, 360);
         page.Controls.Add(silentCard);
         page.Controls.Add(WeaponsCard(408));
-        var note = Card("Aplicação", 408, 220);
-        AddNote(note, "Você pode preparar as opções antes de abrir o FiveM. Elas ficam pendentes até validar o processo b3258 e o personagem local. A barra inferior mostra a revisão aplicada. Peito (aprox.) usa um ponto estimado na parte superior do tronco. Linha de visão não está disponível neste perfil.", 61, 360);
+        var note = Card("Configuração local", 408, 258);
+        AddNote(note, "Você pode preparar as opções antes de abrir o FiveM. Elas ficam pendentes até validar o processo b3258 e o personagem local. A barra inferior mostra a configuração recebida pelo backend. A situação de cada função indica o que foi confirmado em leitura; o comportamento no jogo precisa ser conferido. Peito (aprox.) usa um ponto estimado na parte superior do tronco. Linha de visão não está disponível neste perfil.", 61, 360);
         page.Controls.Add(note);
     }
 
@@ -236,16 +246,16 @@ internal sealed class MainForm : Form
         var page = NewPage("Player");
         var card = Card("Personagem", 408, 250);
         AddToggle(card, "GodMode", () => _settings.Player.GodMode, v => _settings.Player.GodMode = v, "player.godMode", 64);
-        AddToggle(card, "Noclip", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 106);
-        _revive.Text = "Reviver personagem";
-        _tooltips.SetToolTip(_revive, "Disponível somente se o backend local confirmar suporte e uma sessão ativa.");
-        _revive.Location = new Point(20, 166);
+        _revive.Text = "Reviver indisponível";
+        _tooltips.SetToolTip(_revive, "Reviver externo ainda não implementado neste perfil.");
+        _revive.Location = new Point(20, 124);
         _revive.Width = 220;
         card.Controls.Add(_revive);
         RegisterCapability("player.revive", _revive);
+        AddNote(card, "Reviver externo ainda não implementado.", 184, 360);
         page.Controls.Add(card);
         var note = Card("Estado do personagem", 408, 250);
-        AddNote(note, "GodMode pode ser preparado localmente e só é aplicado após validar o personagem. Reviver e Noclip ainda aguardam implementação confirmada neste perfil. Ao perder a sessão, os efeitos ativos são desativados nas opções locais.", 62, 360);
+        AddNote(note, "GodMode pode ser preparado localmente e depende de um personagem validado. Consulte Situação das funções para distinguir configuração recebida de valores confirmados em leitura.\n\nReviver e noclip permanecem indisponíveis neste perfil externo.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -271,18 +281,14 @@ internal sealed class MainForm : Form
     private void BuildNoclipPage()
     {
         var page = NewPage("Noclip");
-        var card = Card("Noclip / voar", 408, 215);
-        AddToggle(card, "Ativar noclip", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 64);
+        var card = Card("Noclip externo · indisponível", 408, 215);
+        AddToggle(card, "Noclip indisponível", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 64);
         AddSlider(card, "Velocidade (m/s)", 1, 50, _settings.Player.NoclipSpeed,
             v => _settings.Player.NoclipSpeed = v, "player.noclip", 108);
-        var administration = Theme.Button("Abrir modo administrativo", true);
-        administration.Location = new Point(20, 160);
-        administration.Width = 300;
-        administration.Click += async (_, _) => await OpenAdminModeAsync();
-        card.Controls.Add(administration);
+        AddNote(card, "Noclip externo ainda não implementado.", 166, 360);
         page.Controls.Add(card);
-        var note = Card("Controles", 408, 240);
-        AddNote(note, "Noclip e voo usam o recurso administrativo instalado no seu servidor. No modo administrativo, use W/A/S/D para mover, Espaço para subir, Ctrl para descer e Shift para acelerar. Ajustar a velocidade mantém o movimento e o ESP ativos.", 62, 360);
+        var note = Card("Disponibilidade", 408, 215);
+        AddNote(note, "Movimento e velocidade do noclip não são enviados ao jogo por esta versão. O controle de velocidade permanece visível e desativado enquanto essa função não tem suporte real.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -291,7 +297,7 @@ internal sealed class MainForm : Form
         var page = NewPage("Weapons");
         page.Controls.Add(WeaponsCard(408));
         var note = Card("Armas", 408, 220);
-        AddNote(note, "As opções podem ser preparadas localmente. Ao detectar o processo, funcionalidades sem suporte confirmado ficam bloqueadas. A revisão aplicada é informada pelo backend; comportamento no jogo requer validação nessa build.", 62, 360);
+        AddNote(note, "No Recoil e No Spread só ficam disponíveis quando o perfil confirma os campos da arma. Configuração recebida não confirma efeito no jogo; consulte a situação de cada função. Freeze Ammo externo ainda não implementado.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -300,13 +306,15 @@ internal sealed class MainForm : Form
         var card = Card("Weapons Settings", width, 212);
         AddToggle(card, "No Recoil", () => _settings.Weapons.NoRecoil, v => _settings.Weapons.NoRecoil = v, "weapons.noRecoil", 64);
         AddToggle(card, "No Spread", () => _settings.Weapons.NoSpread, v => _settings.Weapons.NoSpread = v, "weapons.noSpread", 106);
-        AddToggle(card, "Freeze Ammo", () => _settings.Weapons.FreezeAmmo, v => _settings.Weapons.FreezeAmmo = v, "weapons.freezeAmmo", 148);
+        AddToggle(card, "Freeze Ammo · indisponível", () => _settings.Weapons.FreezeAmmo, v => _settings.Weapons.FreezeAmmo = v, "weapons.freezeAmmo", 148);
         return card;
     }
 
     private void BuildConnectionPage()
     {
         var page = NewPage("Connection");
+        var featureCard = BuildFeatureStatusCard();
+        page.Controls.Add(featureCard);
         var card = Card("Detecção do processo local", 834, 315);
         var processLabel = Theme.Label("Processo detectado");
         processLabel.Location = new Point(20, 60);
@@ -324,22 +332,12 @@ internal sealed class MainForm : Form
         note.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         _connect.Location = new Point(20, 187);
         _disconnect.Location = new Point(180, 187);
-        _saveDiagnostic.Location = new Point(350, 187);
-        _saveDiagnostic.Width = 185;
         _connectionDetails.AutoSize = false;
         _connectionDetails.Location = new Point(20, 245);
         _connectionDetails.Size = new Size(790, 55);
         _connectionDetails.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        card.Controls.AddRange(new Control[] { processLabel, _process, note, _connect, _disconnect, _saveDiagnostic, _connectionDetails });
+        card.Controls.AddRange(new Control[] { processLabel, _process, note, _connect, _disconnect, _connectionDetails });
         page.Controls.Add(card);
-
-        var administrationCard = Card("Servidor próprio", 834, 145);
-        var administrationButton = Theme.Button("Abrir modo administrativo", true);
-        administrationButton.Location = new Point(20, 66);
-        administrationButton.Width = 300;
-        administrationButton.Click += async (_, _) => await OpenAdminModeAsync();
-        administrationCard.Controls.Add(administrationButton);
-        page.Controls.Add(administrationCard);
 
         var events = Card("Eventos e diagnóstico", 834, 263);
         _eventLog.Multiline = true;
@@ -358,8 +356,117 @@ internal sealed class MainForm : Form
         {
             var width = Math.Max(430, Math.Min(834, page.ClientSize.Width - 24));
             card.Width = width;
+            featureCard.Width = width;
             events.Width = width;
         };
+    }
+
+    private RoundedCard BuildFeatureStatusCard()
+    {
+        var card = Card("Situação das funções", 834, 328);
+        var note = Theme.Label("Leitura confirmada indica valores observados pelo backend; confira o comportamento no FiveM.", true);
+        note.AutoSize = false;
+        note.Location = new Point(20, 54);
+        note.Size = new Size(790, 38);
+        note.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _featureStates.Location = new Point(20, 100);
+        _featureStates.Size = new Size(790, 208);
+        _featureStates.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _featureStates.ReadOnly = true;
+        _featureStates.AllowUserToAddRows = false;
+        _featureStates.AllowUserToDeleteRows = false;
+        _featureStates.AllowUserToResizeRows = false;
+        _featureStates.RowHeadersVisible = false;
+        _featureStates.MultiSelect = false;
+        _featureStates.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        _featureStates.AutoSizeRowsMode = DataGridViewAutoSizeRowsMode.AllCells;
+        _featureStates.BackgroundColor = Theme.Card;
+        _featureStates.BorderStyle = BorderStyle.None;
+        _featureStates.GridColor = Theme.Line;
+        _featureStates.EnableHeadersVisualStyles = false;
+        _featureStates.ColumnHeadersDefaultCellStyle.BackColor = Theme.Field;
+        _featureStates.ColumnHeadersDefaultCellStyle.ForeColor = Theme.Text;
+        _featureStates.DefaultCellStyle.BackColor = Theme.Card;
+        _featureStates.DefaultCellStyle.ForeColor = Theme.Text;
+        _featureStates.DefaultCellStyle.SelectionBackColor = Theme.Field;
+        _featureStates.DefaultCellStyle.SelectionForeColor = Theme.Text;
+        _featureStates.DefaultCellStyle.WrapMode = DataGridViewTriState.True;
+        _featureStates.Columns.Add(new DataGridViewTextBoxColumn { Name = "Feature", HeaderText = "Função", Width = 125 });
+        _featureStates.Columns.Add(new DataGridViewTextBoxColumn { Name = "State", HeaderText = "Situação", Width = 175 });
+        _featureStates.Columns.Add(new DataGridViewTextBoxColumn { Name = "Detail", HeaderText = "Detalhes", AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill, MinimumWidth = 160 });
+        card.Controls.AddRange(new Control[] { note, _featureStates });
+        UpdateFeatureStates(null);
+        return card;
+    }
+
+    private void UpdateFeatureStates(IEnumerable<FeatureStatus>? states)
+    {
+        if (_featureStates.Columns.Count == 0) return;
+        var firstVisibleRow = _featureStates.FirstDisplayedScrollingRowIndex;
+        var selectedRow = _featureStates.CurrentCell?.RowIndex ?? -1;
+        _featureStates.Rows.Clear();
+        void RestorePosition()
+        {
+            if (_featureStates.Rows.Count == 0) return;
+            if (selectedRow >= 0)
+                _featureStates.CurrentCell = _featureStates.Rows[Math.Min(selectedRow, _featureStates.Rows.Count - 1)].Cells[0];
+            if (firstVisibleRow >= 0)
+                _featureStates.FirstDisplayedScrollingRowIndex = Math.Min(firstVisibleRow, _featureStates.Rows.Count - 1);
+        }
+        var reported = states?.ToList() ?? new List<FeatureStatus>();
+        if (reported.Count == 0)
+        {
+            _featureStates.Rows.Add("Backend local", "Sem confirmação", "Aguardando um processo e um personagem compatíveis.");
+            foreach (var feature in new[] { "Silent Aim", "Reviver", "Noclip / voar", "Freeze Ammo" })
+                _featureStates.Rows.Add(feature, "Não implementada", "Indisponível neste perfil externo.");
+            RestorePosition();
+            return;
+        }
+        foreach (var feature in reported)
+        {
+            var name = feature.Name switch
+            {
+                "aim" => "Aim",
+                "silent" => "Silent Aim",
+                "esp" => "ESP",
+                "player.godMode" => "GodMode",
+                "player.revive" => "Reviver",
+                "player.suicide" => "Suicídio",
+                "player.noclip" => "Noclip / voar",
+                "player.invisible" => "Invisibilidade",
+                "player.muteVoice" => "Voz recebida",
+                "esp.admins" => "ADMs no ESP",
+                "esp.names" => "Nomes no ESP",
+                "esp.visibility" => "Visibilidade do ESP",
+                "aim.visibility" => "Visibilidade da mira",
+                "weapons.noRecoil" => "No Recoil",
+                "weapons.noSpread" => "No Spread",
+                "weapons.freezeAmmo" => "Freeze Ammo",
+                _ => feature.Name
+            };
+            var state = feature.State switch
+            {
+                "ready" => "Disponível para configurar",
+                "waiting" => "Aguardando dados",
+                "observed" => "Leitura confirmada",
+                "blocked" => "Bloqueada",
+                "unsupported" => "Não implementada",
+                _ => "Sem confirmação"
+            };
+            var detail = feature.Message;
+            if (feature.State == "observed")
+            {
+                if (feature.ObservedUtc is null)
+                    state = "Leitura sem horário";
+                else if (DateTimeOffset.UtcNow - feature.ObservedUtc.Value > TimeSpan.FromSeconds(5))
+                {
+                    state = "Leitura desatualizada";
+                    detail = "Aguardando nova leitura. " + detail;
+                }
+            }
+            _featureStates.Rows.Add(name, state, detail);
+        }
+        RestorePosition();
     }
 
     private static void AddNote(Control card, string text, int top, int width)
@@ -387,10 +494,12 @@ internal sealed class MainForm : Form
             _tooltips.SetToolTip(toggle, "Redirecionamento de projéteis não implementado nesta integração.");
         if (capability == "weapons.noRecoil")
             _tooltips.SetToolTip(toggle, "Só será aplicado se o perfil b3258 confirmar os campos de recuo da arma.");
+        if (capability == "weapons.freezeAmmo")
+            _tooltips.SetToolTip(toggle, "Freeze Ammo externo ainda não implementado.");
         if (capability == "player.godMode")
             _tooltips.SetToolTip(toggle, "Estado local de dano. Scripts da cidade podem alterar saúde e estado de morte separadamente.");
         if (capability == "player.noclip")
-            _tooltips.SetToolTip(toggle, "Aguardando implementação e suporte confirmado pelo backend local.");
+            _tooltips.SetToolTip(toggle, "Noclip externo ainda não implementado. O ajuste permanece desativado.");
         if (capability is "aim.visibility" or "esp.visibility")
             _tooltips.SetToolTip(toggle, "Linha de visão não confirmada para o perfil b3258.");
         if (capability == "esp.names")
@@ -464,7 +573,7 @@ internal sealed class MainForm : Form
             _revisionLabel.Text = "Alterações aguardando envio…";
             if (!_debounce.Enabled) _debounce.Start();
         }
-        else _revisionLabel.Text = "Escolhas locais pendentes; serão aplicadas quando o processo e o personagem forem validados.";
+        else _revisionLabel.Text = "Escolhas locais pendentes; aguardando processo e personagem validados.";
     }
 
     private void SynchronizeToggles()
@@ -489,7 +598,7 @@ internal sealed class MainForm : Form
         _connectionLabel.Text = "AGUARDANDO FIVEM";
         _connectionLabel.ForeColor = Theme.Warning;
         _connectionDetails.Text = "Procurando FiveM_b3258_GTAProcess.exe e um personagem local válido…";
-        _revisionLabel.Text = "Escolhas locais pendentes; nenhuma aplicação confirmada.";
+        _revisionLabel.Text = "Escolhas locais pendentes; nenhum recebimento confirmado pelo backend.";
         _poll.Start();
         UpdateAvailability();
         await PollAsync();
@@ -504,13 +613,13 @@ internal sealed class MainForm : Form
         var changeVersion = _changeVersion;
         var snapshot = JsonSerializer.Deserialize<MenuSettings>(JsonSerializer.Serialize(_settings))!;
         _sending = true;
-        _revisionLabel.Text = "Aplicação local solicitada…";
+        _revisionLabel.Text = "Enviando configuração ao backend local…";
         try
         {
             await _client.PushSettingsAsync(snapshot, cancellation);
             if (generation != _connectionGeneration || _closing) return;
             _dirty = changeVersion != _changeVersion;
-            _revisionLabel.Text = _dirty ? "Novas escolhas locais aguardando aplicação…" : "Configurações enviadas ao backend; aguardando revisão aplicada…";
+            _revisionLabel.Text = _dirty ? "Novas escolhas locais aguardando envio…" : "Configuração enviada; aguardando recebimento pelo backend…";
             if (_dirty) _debounce.Start();
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
@@ -577,6 +686,7 @@ internal sealed class MainForm : Form
     private void ObserveUnavailableBackend()
     {
         _healthy = false;
+        UpdateFeatureStates(null);
         if (_policy.Observe(false, false, false, false)) ResetActiveEffects();
     }
 
@@ -622,7 +732,8 @@ internal sealed class MainForm : Form
 
     private void ApplyStatus(ServerStatus status)
     {
-        _connectionLabel.Text = status.Ready && status.PlayerOnline && status.SessionActive ? "SESSÃO LOCAL ATIVA"
+        UpdateFeatureStates(status.FeatureStates);
+        _connectionLabel.Text = status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
             : status.Ready && status.PlayerOnline ? "PERSONAGEM VALIDADO"
             : status.Ready ? "AGUARDANDO PERSONAGEM" : "AGUARDANDO FIVEM COMPATÍVEL";
         _connectionLabel.ForeColor = status.Ready && status.PlayerOnline && status.SessionActive ? Theme.Success : Theme.Warning;
@@ -634,14 +745,14 @@ internal sealed class MainForm : Form
             ? $"{status.PlayerName} · PID {status.PlayerId} · perfil {status.Version}"
             : $"Perfil alvo b3258 · {status.Version}";
         if (!status.Ready || !status.PlayerOnline)
-            _revisionLabel.Text = "Escolhas locais pendentes; nenhuma aplicação confirmada no personagem.";
+            _revisionLabel.Text = "Escolhas locais pendentes; nenhum recebimento confirmado pelo backend.";
         else if (!status.SessionActive)
-            _revisionLabel.Text = "Processo validado. As escolhas locais aguardam aplicação pelo backend…";
+            _revisionLabel.Text = "Processo validado. As escolhas locais aguardam recebimento pelo backend…";
         else if (!_dirty && !_sending)
             _revisionLabel.Text = status.AppliedRevision == status.DesiredRevision
-                ? $"Revisão {status.AppliedRevision}: o backend local reportou a aplicação."
-                : $"Revisão solicitada {status.DesiredRevision}; aplicada {status.AppliedRevision}.";
-        else if (_dirty && !_sending) _revisionLabel.Text = "Novas escolhas locais aguardando aplicação…";
+                ? $"Configuração {status.AppliedRevision} recebida pelo backend. Consulte Situação das funções."
+                : $"Configuração enviada {status.DesiredRevision}; recebida {status.AppliedRevision}.";
+        else if (_dirty && !_sending) _revisionLabel.Text = "Novas escolhas locais aguardando envio…";
         UpdateAvailability();
     }
 
@@ -651,13 +762,18 @@ internal sealed class MainForm : Form
         _connect.Text = _client.DetectionEnabled ? "Detectando FiveM" : "Detectar FiveM";
         _disconnect.Enabled = _client.DetectionEnabled && !_closing && !_disconnecting;
         var capabilities = _knownCapabilities;
-        _revive.Text = capabilities.Contains("player.revive") ? "Reviver personagem" : "Reviver indisponível";
+        _revive.Text = "Reviver indisponível";
         foreach (var (capability, controls) in _capabilityControls)
         {
             var enabled = !_disconnecting && !_closing && StandaloneUiPolicy.CanEditConfiguration(capability, _capabilitiesKnown, capabilities);
             if (capability == "player.revive")
                 enabled = !_disconnecting && !_closing && !_reviving && _lastStatus is not null &&
                     StandaloneUiPolicy.CanInvokeAction(capability, _healthy, _lastStatus.Ready, _lastStatus.PlayerOnline, _lastStatus.SessionActive, capabilities);
+            if (capability is "weapons.noRecoil" or "weapons.noSpread")
+                enabled &= _healthy && _lastStatus is { Ready: true, PlayerOnline: true } &&
+                    _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
+            if (capability is "silent" or "player.revive" or "player.noclip" or "weapons.freezeAmmo")
+                enabled = false;
             foreach (var control in controls) control.Enabled = enabled;
         }
     }
@@ -727,6 +843,7 @@ internal sealed class MainForm : Form
         _session?.Dispose();
         _session = null;
         _lastStatus = null;
+        UpdateFeatureStates(null);
         _healthy = false;
         _sending = false;
         _polling = false;
@@ -766,6 +883,28 @@ internal sealed class MainForm : Form
         _settings.Esp.Enabled = false;
         SynchronizeToggles();
         _dirty = true;
+    }
+
+    private void FitToWorkingArea()
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        var area = Screen.FromHandle(Handle).WorkingArea;
+        var scale = DeviceDpi / 96d;
+        MinimumSize = new Size(Math.Min(area.Width, (int)Math.Round(950 * scale)),
+            Math.Min(area.Height, (int)Math.Round(660 * scale)));
+        MaximumSize = area.Size;
+        MaximizedBounds = area;
+        if (WindowState != FormWindowState.Normal) return;
+        var width = Math.Min(Width, area.Width);
+        var height = Math.Min(Height, area.Height);
+        Bounds = new Rectangle(Math.Clamp(Left, area.Left, area.Right - width),
+            Math.Clamp(Top, area.Top, area.Bottom - height), width, height);
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+        FitToWorkingArea();
     }
 
     protected override void OnHandleCreated(EventArgs e)
@@ -838,37 +977,6 @@ internal sealed class MainForm : Form
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             AppendLog("Não foi possível salvar o diagnóstico: " + error.Message);
-        }
-    }
-
-    private async Task OpenAdminModeAsync()
-    {
-        if (_closing || _disconnecting || _switchingMode) return;
-        _switchingMode = true;
-        try
-        {
-            await DisconnectAsync();
-            if (_closing) return;
-            if (_hotkeyRegistered)
-            {
-                NativeHotKeys.UnregisterHotKey(Handle, NativeHotKeys.ToggleMenuId);
-                _hotkeyRegistered = false;
-            }
-            Hide();
-            using var administration = new AdminMainForm();
-            administration.ShowDialog();
-        }
-        finally
-        {
-            _switchingMode = false;
-            if (!_closing && !IsDisposed)
-            {
-                Show();
-                Activate();
-                _hotkeyRegistered = NativeHotKeys.RegisterHotKey(Handle, NativeHotKeys.ToggleMenuId,
-                    NativeHotKeys.NoRepeat, NativeHotKeys.InsertKey);
-                _hotkeyLabel.Text = _hotkeyRegistered ? "Insert · ocultar / mostrar" : "Insert indisponível nesta sessão";
-            }
         }
     }
 

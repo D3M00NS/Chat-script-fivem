@@ -58,7 +58,7 @@ internal sealed class AdminMainForm : Form
 
     public AdminMainForm()
     {
-        Text = "Zyon v3 — modo administrativo";
+        Text = AppIdentity.AdministrativeTitle;
         Size = new Size(1100, 790);
         MinimumSize = new Size(950, 660);
         StartPosition = FormStartPosition.CenterScreen;
