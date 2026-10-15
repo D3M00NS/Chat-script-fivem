@@ -1,3 +1,15 @@
+# Zyon 3.1.1 — reviver em standalone, ESX e QBCore
+
+[Pacote completo com runtime](ZyonMenu-v3.1.1-completo.zip) · [Pacote compacto](ZyonMenu-v3.1.1-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.1.1-packages.json) · [Integração médica](../zyon-v3/docs/medical-integration.md)
+
+Esta atualização mantém as correções de noclip e ESP e adiciona reviver com seleção automática por servidor. Instale aplicativo e recurso 3.1.1 juntos. O exemplo de `server.cfg` usa `set zyon_menu_medical_provider "auto"`, adequado para standalone, ESX e QBCore em servidores separados. Pode-se escolher cada perfil explicitamente.
+
+ESX atual usa `esx_death`; ESX legado compatível exige callback médico oficial; QBCore usa `qb-ambulancejob` e confirma flags no cliente e servidor. Recursos parados, APIs ausentes e prazos expirados bloqueiam a ação, sem fallback nativo. ESX intermediário sem essa API e hospitais personalizados precisam de adaptação.
+
+Compilação completa e compacta concluídas; suíte geral e 25 novos testes médicos passaram. Os testes de natives e frameworks usam simulações. Windows/FiveM real ainda precisa de validação. Silent Aim permanece indisponível.
+
+## Pacotes anteriores
+
 # Zyon v3 — prévia independente para FiveM b3258
 
 [Baixar o pacote completo](ZyonMenu-v3-standalone-completo.zip) · [Pacote compacto](ZyonMenu-v3-standalone-compacto.zip)

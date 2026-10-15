@@ -1,0 +1,12 @@
+<!-- XML / tests/ZyonMenu.Standalone.Tests/ZyonMenu.Standalone.Tests.csproj / .NET 8 / portable geometry, signature and UI policy checks. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ZyonMenu.Core/ZyonMenu.Core.csproj" />
+    <Compile Include="../../src/ZyonMenu.Windows/StandaloneUiPolicy.cs" Link="StandaloneUiPolicy.cs" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,11 @@
+<!-- XML / tests/ZyonMenu.Core.Tests/ZyonMenu.Core.Tests.csproj / .NET 8 / portable integration tests -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/ZyonMenu.Core/ZyonMenu.Core.csproj" />
+  </ItemGroup>
+</Project>

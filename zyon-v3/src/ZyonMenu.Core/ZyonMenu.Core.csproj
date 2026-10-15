@@ -1,0 +1,7 @@
+<!-- XML / src/ZyonMenu.Core/ZyonMenu.Core.csproj / .NET 8 / portable client -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+</Project>

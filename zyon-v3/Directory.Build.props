@@ -1,0 +1,9 @@
+<!-- XML / Directory.Build.props / .NET 8 SDK / Windows UI and portable core -->
+<Project>
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>12.0</LangVersion>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+</Project>
