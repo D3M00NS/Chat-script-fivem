@@ -5,6 +5,7 @@
 #include <sddl.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
@@ -14,6 +15,7 @@
 #include "NativeInvoker.h"
 #include "Protocol.h"
 #include "PeExportLookup.h"
+#include "StatusSnapshot.h"
 
 namespace {
 
@@ -30,9 +32,13 @@ using LookupNative = NativeHandler (*)(std::uint64_t);
 
 class ScriptHookInvoker final : public INativeInvoker {
 public:
-    bool Resolve() noexcept {
+    bool Resolve(char (&failure)[160]) noexcept {
+        CopyStatusMessage(failure, nullptr);
         const HMODULE module = GetModuleHandleW(L"scripthookv.dll");
-        if (!module) return false;
+        if (!module) {
+            CopyStatusMessage(failure, "Missing CFX module: scripthookv.dll. Script registration did not occur.");
+            return false;
+        }
         // CFX exports these public ScriptHookV signatures with MSVC C++ linkage.
         // The pointer-only Win64 ABI is compatible with the GNU cross compiler.
         // Plain spellings are accepted only if the loaded implementation
@@ -46,14 +52,31 @@ public:
         init = Find<InitNative>(module, "?nativeInit@@YAX_K@Z", "nativeInit");
         push = Find<PushNative>(module, "?nativePush64@@YAX_K@Z", "nativePush64");
         call = Find<CallNative>(module, "?nativeCall@@YAPEA_KXZ", "nativeCall");
-        const auto engine = GetModuleHandleW(L"rage-scripting-five.dll");
-        MODULEINFO information{};
-        if (engine && K32GetModuleInformation(GetCurrentProcess(), engine, &information, sizeof(information))) {
-            const auto* image = static_cast<const std::uint8_t*>(information.lpBaseOfDll);
-            const auto rva = FindUniqueExportRva(image, information.SizeOfImage, "?GetNativeHandler@scrEngine@rage@@");
-            if (rva) lookup = reinterpret_cast<LookupNative>(const_cast<std::uint8_t*>(image) + rva);
+        if (!registerScript || !waitScript || !init || !push || !call) {
+            std::snprintf(failure, sizeof(failure), "Missing ScriptHookV exports:%s%s%s%s%s",
+                registerScript ? "" : " scriptRegister", waitScript ? "" : " scriptWait",
+                init ? "" : " nativeInit", push ? "" : " nativePush64", call ? "" : " nativeCall");
+            return false;
         }
-        return registerScript && waitScript && init && push && call && lookup;
+        const auto engine = GetModuleHandleW(L"rage-scripting-five.dll");
+        if (!engine) {
+            CopyStatusMessage(failure, "Missing CFX module: rage-scripting-five.dll. Native lookup is unavailable.");
+            return false;
+        }
+        MODULEINFO information{};
+        if (!K32GetModuleInformation(GetCurrentProcess(), engine, &information, sizeof(information))) {
+            std::snprintf(failure, sizeof(failure), "Cannot inspect rage-scripting-five.dll (Win32 error %lu).", GetLastError());
+            return false;
+        }
+        const auto* image = static_cast<const std::uint8_t*>(information.lpBaseOfDll);
+        const auto rva = FindUniqueExportRva(image, information.SizeOfImage, "?GetNativeHandler@scrEngine@rage@@");
+        if (!rva) {
+            CopyStatusMessage(failure,
+                "Missing or ambiguous rage-scripting-five.dll export: rage::scrEngine::GetNativeHandler.");
+            return false;
+        }
+        lookup = reinterpret_cast<LookupNative>(const_cast<std::uint8_t*>(image) + rva);
+        return true;
     }
 
     bool HasNative(std::uint64_t hash) const noexcept override {
@@ -105,6 +128,7 @@ struct SharedState {
     SRWLOCK lock = SRWLOCK_INIT;
     ControlSnapshot control{};
     RuntimeStatus runtime{};
+    ModuleBootstrapFailure bootstrap{};
     std::uint64_t runtimeEpoch = 0;
 };
 
@@ -115,8 +139,7 @@ volatile LONG stopping = FALSE;
 bool Stopping() noexcept { return InterlockedCompareExchange(&stopping, 0, 0) != 0; }
 
 void CopyMessage(char (&target)[160], const char* source) noexcept {
-    std::memset(target, 0, sizeof(target));
-    if (source) std::strncpy(target, source, sizeof(target) - 1);
+    CopyStatusMessage(target, source);
 }
 
 void TransportOffline() noexcept {
@@ -130,52 +153,15 @@ StatusPacket MakeStatus(const std::uint8_t (&token)[16], std::uint32_t error = 0
     RuntimeStatus runtime;
     ControlSnapshot control;
     std::uint64_t runtimeEpoch;
+    ModuleBootstrapFailure bootstrap;
     AcquireSRWLockShared(&shared.lock);
     runtime = shared.runtime;
     control = shared.control;
     runtimeEpoch = shared.runtimeEpoch;
+    bootstrap = shared.bootstrap;
     ReleaseSRWLockShared(&shared.lock);
 
-    StatusPacket packet{};
-    std::memcpy(packet.token, token, sizeof(packet.token));
-    packet.tick = runtime.tick;
-    packet.desiredRevision = control.settings.revision;
-    if (runtimeEpoch == control.sessionEpoch) {
-        packet.appliedRevision = std::min(runtime.appliedRevision, packet.desiredRevision);
-        packet.actionNonce = runtime.actionNonce;
-        packet.capabilities = runtime.capabilities;
-        packet.stateFlags = runtime.stateFlags;
-        packet.action = runtime.action;
-        packet.actionResult = runtime.actionResult;
-        packet.ped = runtime.ped;
-        packet.build = runtime.build;
-        packet.error = runtime.error;
-        CopyMessage(packet.message, runtime.message);
-    } else {
-        packet.error = WaitingNative;
-        packet.stateFlags = Blocked;
-        CopyMessage(packet.message, "Waiting for a game script frame for this connection.");
-    }
-    if (control.actionNonce > packet.actionNonce) {
-        packet.actionNonce = control.actionNonce;
-        packet.action = control.action;
-        packet.actionResult = Pending;
-    }
-    const auto now = GetTickCount64();
-    if (!packet.tick || now < packet.tick || now - packet.tick > MaximumFrameAgeMilliseconds) {
-        packet.stateFlags = (packet.stateFlags & ~(Ready | SettingsActive)) | Blocked;
-        packet.capabilities = 0;
-        if (packet.error != Unavailable) {
-            packet.error = FrameStale;
-            CopyMessage(packet.message,
-                "No authorized game frame. Check ScriptHook permission and whether the player is in the game.");
-        }
-    }
-    if (error) {
-        packet.error = error;
-        CopyMessage(packet.message, detail);
-    }
-    return packet;
+    return BuildStatusSnapshot(token, runtime, control, runtimeEpoch, bootstrap, GetTickCount64(), error, detail);
 }
 
 bool ReadExact(HANDLE pipe, void* destination, DWORD length, ULONGLONG deadline) noexcept {
@@ -388,17 +374,25 @@ BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
         HMODULE pinned = nullptr;
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                 reinterpret_cast<LPCWSTR>(&DllMain), &pinned)) return FALSE;
-        if (invoker.Resolve()) {
+        char failure[160]{};
+        if (invoker.Resolve(failure)) {
             invoker.registerScript(module, ScriptMain);
         } else {
-            shared.runtime.stateFlags = Blocked;
-            shared.runtime.error = Unavailable;
-            CopyMessage(shared.runtime.message, "Required CFX ScriptHookV exports or native lookup are unavailable.");
+            shared.bootstrap.failed = true;
+            CopyMessage(shared.bootstrap.message, failure);
         }
         // The worker performs no DLL loading or native calls. We never wait for
         // it under the loader lock; Windows starts its entry after DllMain exits.
         HANDLE worker = CreateThread(nullptr, 0, PipeWorker, nullptr, 0, nullptr);
         if (worker) CloseHandle(worker);
+        else {
+            // There is no IPC channel when worker creation itself fails. Keep
+            // the exact failure available to a Windows debugger, without
+            // pretending it was sent to the desktop application.
+            char detail[160]{};
+            std::snprintf(detail, sizeof(detail), "ZyonClient: pipe worker creation failed (Win32 error %lu).", GetLastError());
+            OutputDebugStringA(detail);
+        }
     } else if (reason == DLL_PROCESS_DETACH) {
         InterlockedExchange(&stopping, TRUE);
         if (invoker.unregisterScript) invoker.unregisterScript(ScriptMain);

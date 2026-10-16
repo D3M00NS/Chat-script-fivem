@@ -32,6 +32,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     private readonly List<MenuEvent> _events = [];
     private readonly Func<int?> _discoverProcess;
     private readonly Func<int, CancellationToken, Task<NamedPipeClientStream>> _connect;
+    private readonly Func<object?>? _installationDiagnostics;
     private Connection? _connection;
     private ClientModuleStatus? _native;
     private MenuSettings _settings = EmptySettings();
@@ -59,11 +60,12 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     }
 
     internal ClientModuleSession(ILocalGameSession external, Func<int?> discoverProcess,
-        Func<int, CancellationToken, Task<NamedPipeClientStream>> connect)
+        Func<int, CancellationToken, Task<NamedPipeClientStream>> connect, Func<object?>? installationDiagnostics = null)
     {
         _external = external ?? throw new ArgumentNullException(nameof(external));
         _discoverProcess = discoverProcess ?? throw new ArgumentNullException(nameof(discoverProcess));
         _connect = connect ?? throw new ArgumentNullException(nameof(connect));
+        _installationDiagnostics = installationDiagnostics;
         _worker = Task.Run(PollLoopAsync);
     }
 
@@ -95,6 +97,14 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             RefreshIdentityLocked();
             bool ready = NativeReadyLocked();
             var result = ExternalStateSerialization.Clone(memory);
+            result.NativeClient = new NativeClientStatus
+            {
+                TransportConnected = _connection is not null, Ready = ready,
+                ProcessId = _connection?.ProcessId, Error = _native?.Error,
+                Message = _connection is not null && _externalReady && _externalPid != _connection.ProcessId
+                    ? "O leitor de memória e o módulo pertencem a processos diferentes. Feche cópias extras do FiveM e detecte novamente."
+                    : _moduleMessage
+            };
             var capabilities = memory.Ready
                 ? memory.Capabilities.Where(name => !NativeFeatures.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList()
                 : [];
@@ -387,12 +397,17 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     public string CaptureDiagnostics()
     {
         string external = _external.CaptureDiagnostics();
+        object? installation;
+        try { installation = _installationDiagnostics?.Invoke(); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or Win32Exception)
+        { installation = new { Available = false, Message = error.Message }; }
         using var parsed = JsonDocument.Parse(external);
         lock (_gate)
             return ExternalStateSerialization.SerializeDiagnostics(new
             {
                 Product = "Zyon optional local client module", Version = AppIdentity.DisplayVersion,
                 CapturedUtc = DateTimeOffset.UtcNow, DetectionEnabled, PlayerEpoch = _playerEpoch,
+                Installation = installation,
                 Configuration = ExternalStateSerialization.Clone(_settings),
                 Native = new { ProcessId = _connection?.ProcessId, ConnectionEpoch = _connectionEpoch,
                     State = _native, ObservedUtc = _nativeObservedUtc, ReadyFresh = NativeReadyLocked(),

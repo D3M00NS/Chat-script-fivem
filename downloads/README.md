@@ -1,3 +1,13 @@
+# Zyon 3.3.1 — conexão e preparação do cliente
+
+[Pacote completo com runtime](ZyonMenu-v3.3.1-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.1-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.1-packages.json)
+
+Corrige a perda do erro de inicialização do plugin, que podia virar uma mensagem genérica de permissão. Verifica a pasta da instalação realmente aberta e o hash do ASI instalado. O banner oferece **Usar cliente local**, **Preparar módulo**, **Verificar novamente** e **Salvar diagnóstico**, com o motivo de bloqueio nas abas de personagem e veículo.
+
+Feche o FiveM, extraia o pacote em pasta nova, abra `ZyonMenu.exe` e prepare o módulo novamente antes de abrir o jogo. O modo local continua exigindo plugins/ScriptHook permitidos pelo servidor, sem cargo de ADM ou recurso de servidor. Um ASI no disco não confirma sua execução. As funções e limites da 3.3.0 permanecem, incluindo Silent Aim experimental. [Instruções](../zyon-v3/docs/client-module-3.3.1.md).
+
+## Versões anteriores
+
 # Zyon 3.3.0 — módulo local para teste no Windows
 
 [Pacote completo com runtime](ZyonMenu-v3.3.0-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.0-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.0-packages.json)

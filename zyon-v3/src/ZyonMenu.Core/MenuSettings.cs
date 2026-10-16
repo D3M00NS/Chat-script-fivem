@@ -79,6 +79,7 @@ public sealed class EspSettings
 
 public sealed class ServerStatus
 {
+    public NativeClientStatus? NativeClient { get; set; }
     public string Version { get; set; } = "";
     public bool Ready { get; set; }
     public bool SessionActive { get; set; }
@@ -92,6 +93,15 @@ public sealed class ServerStatus
     public string MedicalProvider { get; set; } = "";
     public string MedicalMessage { get; set; } = "";
     public List<FeatureStatus> FeatureStates { get; set; } = [];
+}
+
+public sealed class NativeClientStatus
+{
+    public bool TransportConnected { get; set; }
+    public bool Ready { get; set; }
+    public int? ProcessId { get; set; }
+    public uint? Error { get; set; }
+    public string Message { get; set; } = "";
 }
 
 public sealed class FeatureStatus

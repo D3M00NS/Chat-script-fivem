@@ -1,13 +1,15 @@
-# Validação da versão 3.3.0
+# Validação da versão 3.3.1
 
-As publicações Windows x64 completa e compacta passaram com warnings tratados como erros. A inspeção dos recursos .NET confirmou, em ambas as publicações, que os **452.096 bytes** do ASI embutido correspondem ao módulo nativo compilado. O PE foi validado como DLL AMD64 com recurso `FX_ASI_BUILD` de tipo `3258` e dependências de sistema.
+As publicações Windows x64 completa e compacta passaram com warnings tratados como erros. A inspeção dos recursos .NET confirmou, em ambas as publicações, que os **454.656 bytes** do ASI embutido correspondem ao módulo nativo compilado. O PE foi validado como DLL AMD64 com recurso `FX_ASI_BUILD` de tipo `3258` e dependências de sistema.
 
 | Verificação | Resultado |
 | --- | --- |
-| C# portável, incluindo pipes reais com jogo simulado | 14 suítes, 587 assertivas |
-| Provider local, incluído nas suítes C# | 15 cenários, 112 assertivas |
+| C# portável, incluindo pipes reais com jogo simulado | 15 suítes, 618 assertivas |
+| Provider local, incluído nas suítes C# | 15 cenários, 114 assertivas |
+| Inspeção de instalação, incluída nas suítes C# | 29 verificações |
 | Motor nativo com natives simuladas e PE sintético | 28 suítes, 196 assertivas |
 | Disparo direcionado experimental com natives simuladas | 7 suítes, 150 assertivas |
+| Preservação de erro de inicialização e estados nativos | 6 suítes, 33 assertivas |
 | HTTP/pareamento local | 30 verificações |
 | Contratos Lua do servidor simulado | 54 verificações |
 | Lua cliente com natives simuladas | 166 assertivas |
@@ -16,6 +18,8 @@ As publicações Windows x64 completa e compacta passaram com warnings tratados 
 | NUI JavaScript | 23 testes, sem falhas ou skips |
 
 As regressões incluem a recusa de uma ação sem capacidade seguida de outra ação válida, cancelamento fora da trava da sessão, controle e readback de portas, ausência de replay, preservação de GodMode/noclip após falha experimental e leitura de consumo antes da reposição de munição. O resultado experimental permanece disponível ao alternar para o menu para salvar o diagnóstico.
+
+As verificações novas distinguem módulo ausente, diferente, ilegível e correspondente no disco; limitam os arquivos lidos e não tratam hash correspondente como execução nativa. A prontidão do módulo é exposta separadamente da prontidão do leitor de memória. As falhas de inicialização são preservadas após Hello e reconexões, em vez de virarem um aviso genérico de permissão.
 
 O ambiente de desenvolvimento utiliza SDK .NET 8.0.426, Zig 0.15.2 e compilação cruzada no Linux. Os testes portáveis usam comunicação local real quando indicado e simulam o jogo e as natives; não substituem uma sessão Windows/FiveM.
 
@@ -29,4 +33,4 @@ Bloquear/desbloquear veículo observa apenas o estado nativo das portas após ob
 
 Voz recebida, ADMs/nomes e visibilidade do ESP externo continuam sem implementação. Testes médicos da integração administrativa anterior não estabelecem suporte médico no módulo cliente.
 
-Os pacotes 3.3.0 devem conter aplicativo e ASI atualizados juntos. O protocolo 2 usa `ZyonClientBridge-v2-<GTA_PID>` e é incompatível com o módulo 3.2.0. Feche o FiveM e execute **Preparar módulo local** novamente antes do teste. Exporte **Salvar diagnóstico** com o jogo aberto se o módulo continuar desconectado.
+Os pacotes 3.3.1 devem conter aplicativo e ASI atualizados juntos. O protocolo 2 usa `ZyonClientBridge-v2-<GTA_PID>` e é incompatível com o módulo 3.2.0. O ASI da 3.3.0 também precisa ser atualizado para receber a correção do diagnóstico. Feche o FiveM e execute **Preparar módulo local** novamente antes do teste. Exporte **Salvar diagnóstico** com o jogo aberto se o módulo continuar desconectado.

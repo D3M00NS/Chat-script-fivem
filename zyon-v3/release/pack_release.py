@@ -97,7 +97,8 @@ for flavor, folder in (("completo", "win-x64"), ("compacto", "compacto")):
         "Aim/ESP/recoil/spread usam o backend de memoria b3258 e suas validacoes.\n"
         "Para usar somente o backend externo anterior: Abrir-somente-externo.cmd ou ZyonMenu.exe --external.\n"
         "Compilacao e verificacoes automatizadas registradas no manifest. Windows/FiveM real nao executados aqui.\n"
-        "Consulte codigo-fonte/README.md e codigo-fonte/docs/client-module-3.3.0.md.\n"
+        "Se abrir o modo externo, use Usar cliente local no banner. Preparar modulo e Verificar novamente ficam visiveis em todas as abas.\n"
+        "Consulte codigo-fonte/README.md e codigo-fonte/docs/client-module-3.3.1.md.\n"
     )
     archive = OUTPUT / f"{PREFIX}-{flavor}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:

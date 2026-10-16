@@ -21,7 +21,7 @@ internal static class ClientModuleInstaller
                 return;
             }
             using var image = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName)
-                ?? throw new InvalidOperationException("Este executável não contém o módulo local. Use o pacote completo da versão 3.3.0 ou posterior.");
+                ?? throw new InvalidOperationException("Este executável não contém o módulo local. Use o pacote completo da versão 3.3.1 ou posterior.");
             using var buffer = new MemoryStream();
             image.CopyTo(buffer);
             var bytes = buffer.ToArray();
@@ -31,13 +31,16 @@ internal static class ClientModuleInstaller
             {
                 Description = "Selecione a pasta FiveM.app da sua instalação do FiveM. O módulo será copiado apenas para plugins.",
                 UseDescriptionForTitle = true,
-                SelectedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FiveM", "FiveM.app"),
+                SelectedPath = ClientModuleInstallation.Refresh().RootPath ?? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FiveM", "FiveM.app"),
                 ShowNewFolderButton = false
             };
             if (picker.ShowDialog(owner) != DialogResult.OK) return;
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(picker.SelectedPath));
             if (!Directory.Exists(root) || !Path.GetFileName(root).Equals("FiveM.app", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("Selecione a pasta FiveM.app, e não a pasta do GTA ou do servidor.");
+            if (root.StartsWith("\\\\", StringComparison.Ordinal) || !LooksLikeFiveMRoot(root))
+                throw new InvalidOperationException("Esta pasta não contém os arquivos de uma instalação local do FiveM. Selecione a FiveM.app usada para abrir seu jogo.");
             if (GameIsRunning())
                 throw new InvalidOperationException("O FiveM foi iniciado durante a preparação. Feche o jogo e tente novamente.");
             var plugins = Path.Combine(root, "plugins");
@@ -76,6 +79,7 @@ internal static class ClientModuleInstaller
                 Sha256 = hash, InstalledUtc = DateTimeOffset.UtcNow,
                 PreviousBackup = backup is null ? null : Path.GetFileName(backup)
             }, new JsonSerializerOptions { WriteIndented = true }));
+            ClientModuleInstallation.RememberSelectedRoot(root);
             MessageBox.Show(owner,
                 "Módulo preparado em:\n" + destination +
                 "\n\nAbra o FiveM novamente e mantenha o menu no modo CLIENTE LOCAL. O aplicativo detectará o módulo automaticamente." +
@@ -84,7 +88,7 @@ internal static class ClientModuleInstaller
                 (backup is null ? "" : "\nA cópia anterior foi preservada com extensão .bak."),
                 "Módulo local preparado", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             MessageBox.Show(owner, error.Message, "Módulo local não preparado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
@@ -92,8 +96,25 @@ internal static class ClientModuleInstaller
 
     private static bool GameIsRunning()
     {
-        var processes = Process.GetProcessesByName("FiveM_b3258_GTAProcess");
-        try { return processes.Length != 0; }
+        var processes = Process.GetProcesses();
+        try
+        {
+            foreach (var process in processes)
+            {
+                try
+                {
+                    var name = process.ProcessName;
+                    if (name.Equals("FiveM", StringComparison.OrdinalIgnoreCase) ||
+                        name.StartsWith("FiveM_", StringComparison.OrdinalIgnoreCase)) return true;
+                }
+                catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
+                { /* A process can exit during enumeration. */ }
+            }
+            return false;
+        }
         finally { foreach (var process in processes) process.Dispose(); }
     }
+
+    private static bool LooksLikeFiveMRoot(string root) => File.Exists(Path.Combine(root, "CitizenFX.ini")) ||
+        Directory.Exists(Path.Combine(root, "citizen")) || Directory.Exists(Path.Combine(root, "data", "cache", "subprocess"));
 }

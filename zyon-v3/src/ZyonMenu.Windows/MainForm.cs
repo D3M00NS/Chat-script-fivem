@@ -12,6 +12,10 @@ internal sealed class MainForm : Form
     private readonly Dictionary<string, List<Control>> _capabilityControls = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<(ToggleSwitch Control, Func<bool> Getter)> _toggleBindings = new();
     private readonly ToolTip _tooltips = new();
+    private readonly Dictionary<Control, string> _configurationTooltips = new();
+    private readonly Dictionary<Control, string> _disabledControlReasons = new();
+    private readonly HashSet<Control> _tooltipParents = new();
+    private Control? _disabledTooltipControl;
     private readonly System.Windows.Forms.Timer _debounce = new() { Interval = 60 };
     private readonly System.Windows.Forms.Timer _poll = new() { Interval = 1600 };
     private readonly Panel _content = new() { Dock = DockStyle.Fill, BackColor = Theme.Background, Padding = new Padding(24, 16, 12, 12) };
@@ -20,6 +24,9 @@ internal sealed class MainForm : Form
     private readonly Label _revisionLabel = Theme.Label("Aguardando detecção automática do FiveM.", true);
     private readonly Label _serverLabel = Theme.Label("", true);
     private readonly Label _connectionDetails = Theme.Label("Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
+    private readonly Label _readinessDetails = Theme.Label("Verificando a conexão do cliente…", true);
+    private readonly Button _readinessPrimary = Theme.Button("Preparar módulo local", true);
+    private readonly Button _readinessRefresh = Theme.Button("Verificar novamente");
     private readonly TextBox _process = Theme.TextBox();
     private readonly TextBox _eventLog = new();
     private readonly Button _connect = Theme.Button("Detectar FiveM", true);
@@ -55,6 +62,12 @@ internal sealed class MainForm : Form
     private long _changeVersion;
     private long _connectionGeneration;
     private long _eventsCursor;
+    private string? _lastPlayerBlockReason;
+    private string? _lastVehicleBlockReason;
+    private DateTimeOffset _playerActionFeedbackUntilUtc;
+    private DateTimeOffset _vehicleActionFeedbackUntilUtc;
+
+    public bool ClientModuleRequested { get; private set; }
 
     private static MenuSettings CreateLocalDefaults()
     {
@@ -98,6 +111,23 @@ internal sealed class MainForm : Form
         _connect.Click += async (_, _) => await StartDetectionAsync();
         _disconnect.Click += async (_, _) => await DisconnectAsync();
         _saveDiagnostic.Click += (_, _) => SaveDiagnostic();
+        _readinessPrimary.Click += (_, _) =>
+        {
+            if (!UsesClientModule)
+            {
+                ClientModuleRequested = true;
+                Close();
+                return;
+            }
+            ClientModuleInstaller.ShowSetup(this);
+            ClientModuleInstallation.Refresh(force: true);
+            UpdateAvailability();
+        };
+        _readinessRefresh.Click += async (_, _) =>
+        {
+            ClientModuleInstallation.Refresh(force: true);
+            await StartDetectionAsync();
+        };
         _revive.Click += async (_, _) => await ReviveAsync();
         _suicide.Click += async (_, _) => await SuicideAsync();
         _lockVehicle.Click += async (_, _) => await SetVehicleLockAsync(true);
@@ -161,7 +191,7 @@ internal sealed class MainForm : Form
         sidebar.Controls.Add(mark);
 
         var main = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background };
-        var header = new Panel { Dock = DockStyle.Top, Height = 124, Padding = new Padding(26, 15, 26, 8), BackColor = Theme.Background };
+        var header = new Panel { Dock = DockStyle.Top, Height = 190, Padding = new Padding(26, 15, 26, 8), BackColor = Theme.Background };
         var title = Theme.Label($"ZYON {AppIdentity.DisplayVersion}  /  {(UsesClientModule ? "CLIENTE LOCAL" : "STANDALONE")}");
         title.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
         title.Location = new Point(26, 16);
@@ -182,15 +212,22 @@ internal sealed class MainForm : Form
         {
             _connectionLabel.Location = new Point(header.Width - 316, 17);
             _hotkeyLabel.Location = new Point(header.Width - 316, 44);
+            _readinessDetails.Width = Math.Max(100, header.ClientSize.Width - 52);
         };
         _tooltips.SetToolTip(_hotkeyLabel, "Insert oculta ou mostra o menu. A sessão permanece conectada enquanto a janela está oculta.");
-        _saveDiagnostic.Location = new Point(26, 78);
+        _readinessDetails.AutoSize = false;
+        _readinessDetails.AutoEllipsis = true;
+        _readinessDetails.Location = new Point(26, 76);
+        _readinessDetails.Size = new Size(790, 48);
+        _readinessDetails.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+        _readinessPrimary.Location = new Point(26, 136);
+        _readinessPrimary.Width = 220;
+        _readinessRefresh.Location = new Point(256, 136);
+        _readinessRefresh.Width = 210;
+        _saveDiagnostic.Location = new Point(486, 136);
         _saveDiagnostic.Width = 185;
-        var functionStatus = Theme.Button("Situação das funções");
-        functionStatus.Location = new Point(226, 78);
-        functionStatus.Width = 185;
-        functionStatus.Click += (_, _) => ShowPage("Connection");
-        header.Controls.AddRange(new Control[] { title, subtitle, _connectionLabel, _hotkeyLabel, _saveDiagnostic, functionStatus });
+        header.Controls.AddRange(new Control[] { title, subtitle, _connectionLabel, _hotkeyLabel,
+            _readinessDetails, _readinessPrimary, _readinessRefresh, _saveDiagnostic });
 
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(26, 5, 24, 5), BackColor = Theme.Sidebar };
         _revisionLabel.Location = new Point(26, 8);
@@ -427,7 +464,12 @@ internal sealed class MainForm : Form
             var setupModule = Theme.Button("Preparar módulo local", true);
             setupModule.Location = new Point(350, 187);
             setupModule.Width = 220;
-            setupModule.Click += (_, _) => ClientModuleInstaller.ShowSetup(this);
+            setupModule.Click += (_, _) =>
+            {
+                ClientModuleInstaller.ShowSetup(this);
+                ClientModuleInstallation.Refresh(force: true);
+                UpdateAvailability();
+            };
             card.Controls.Add(setupModule);
         }
         page.Controls.Add(card);
@@ -843,10 +885,13 @@ internal sealed class MainForm : Form
     {
         if (!UsesClientModule) _settings.Silent.Enabled = false;
         UpdateFeatureStates(status.FeatureStates);
-        _connectionLabel.Text = status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
+        var nativeReady = !UsesClientModule || status.NativeClient is { Ready: true };
+        _connectionLabel.Text = !nativeReady
+            ? status.NativeClient is { TransportConnected: true } ? "MÓDULO AGUARDA EXECUÇÃO" : "MÓDULO NÃO CONECTADO"
+            : status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
             : status.Ready && status.PlayerOnline ? "PERSONAGEM VALIDADO"
             : status.Ready ? "AGUARDANDO PERSONAGEM" : "AGUARDANDO FIVEM COMPATÍVEL";
-        _connectionLabel.ForeColor = status.Ready && status.PlayerOnline && status.SessionActive ? Theme.Success : Theme.Warning;
+        _connectionLabel.ForeColor = nativeReady && status.Ready && status.PlayerOnline && status.SessionActive ? Theme.Success : Theme.Warning;
         _connectionDetails.Text = status.Message;
         _process.Text = status.PlayerId is not null
             ? $"FiveM_b3258_GTAProcess.exe · PID {status.PlayerId}"
@@ -868,6 +913,7 @@ internal sealed class MainForm : Form
 
     private void UpdateAvailability()
     {
+        UpdateReadinessBanner();
         _connect.Enabled = !_client.DetectionEnabled && !_disconnecting && !_closing;
         _connect.Text = _client.DetectionEnabled ? "Detectando FiveM" : "Detectar FiveM";
         _disconnect.Enabled = _client.DetectionEnabled && !_closing && !_disconnecting;
@@ -891,8 +937,152 @@ internal sealed class MainForm : Form
                     _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
             if (!UsesClientModule && capability is ("silent" or "player.revive" or "player.noclip" or "weapons.freezeAmmo"))
                 enabled = false;
-            foreach (var control in controls) control.Enabled = enabled;
+            foreach (var control in controls)
+            {
+                control.Enabled = enabled;
+                if (!IsNativeCapability(capability)) continue;
+                if (!_configurationTooltips.ContainsKey(control)) _configurationTooltips[control] = _tooltips.GetToolTip(control) ?? "";
+                if (enabled)
+                {
+                    _disabledControlReasons.Remove(control);
+                    _tooltips.SetToolTip(control, _configurationTooltips[control]);
+                }
+                else
+                {
+                    var reason = NativeActionBlockReason(capability);
+                    _disabledControlReasons[control] = reason;
+                    _tooltips.SetToolTip(control, reason);
+                    RegisterDisabledControlTooltip(control);
+                }
+            }
         }
+        UpdateActionBlockMessages();
+    }
+
+    private static bool IsNativeCapability(string capability) => capability is
+        "player.godMode" or "player.noclip" or "player.invisible" or "player.revive" or "player.suicide" or
+        "weapons.freezeAmmo" or "silent" or "vehicle.lock" or "vehicle.unlock";
+
+    private void UpdateReadinessBanner()
+    {
+        _readinessPrimary.Text = UsesClientModule ? "Preparar módulo local" : "Usar cliente local";
+        _readinessPrimary.Enabled = !_closing && !_disconnecting;
+        _readinessRefresh.Enabled = !_closing && !_disconnecting;
+        _saveDiagnostic.Enabled = !_closing;
+        if (!UsesClientModule)
+        {
+            _readinessDetails.Text = "Modo externo: as funções de personagem e veículo precisam do cliente local. Use o botão abaixo para trocar de modo.";
+            _readinessDetails.ForeColor = Theme.Warning;
+        }
+        else
+        {
+            ClientModuleInstallation.Refresh();
+            var reason = NativeActionBlockReason();
+            _readinessDetails.Text = string.IsNullOrEmpty(reason)
+                ? "Cliente local conectado e execução nativa confirmada. As funções disponíveis estão liberadas."
+                : reason;
+            _readinessDetails.ForeColor = string.IsNullOrEmpty(reason) ? Theme.Success : Theme.Warning;
+        }
+        _tooltips.SetToolTip(_readinessDetails, _readinessDetails.Text);
+    }
+
+    private string NativeActionBlockReason(string? capability = null)
+    {
+        if (!UsesClientModule) return "Modo externo. Clique em Usar cliente local para conectar as funções nativas.";
+        if (_closing || _disconnecting) return "A sessão está sendo encerrada. Aguarde para conectar novamente.";
+        if (!_client.DetectionEnabled) return "Detecção interrompida. Clique em Verificar novamente para procurar o FiveM.";
+        var native = _healthy ? _lastStatus?.NativeClient : null;
+        var installation = ClientModuleInstallation.Current;
+        if (!_healthy || native is not { Ready: true })
+        {
+            if (installation.RunningGameProcessName is { Length: > 0 } processName &&
+                processName.StartsWith("FiveM_b", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(Path.GetFileNameWithoutExtension(processName), "FiveM_b3258_GTAProcess", StringComparison.OrdinalIgnoreCase))
+                return $"{processName} está aberto. Esta versão precisa da build b3258; entre numa cidade compatível.";
+            if (installation.State == ClientModuleInstallationState.AccessDenied)
+                return installation.Reason + " Confira a pasta e suas permissões de leitura.";
+            if (native is { TransportConnected: true })
+                return string.IsNullOrWhiteSpace(native.Message)
+                    ? "O módulo conectou, mas o FiveM ainda não confirmou execução nativa. Aguarde entrar na cidade."
+                    : native.Message;
+            if (installation.RunningGameProcessId is null && installation.RootSource != "unknown")
+                return installation.State is ClientModuleInstallationState.Missing or ClientModuleInstallationState.Outdated
+                    ? "FiveM não encontrado. Prepare o módulo local com o jogo fechado; depois abra o jogo e entre na cidade. " + installation.Reason
+                    : "FiveM não encontrado. Abra o jogo após preparar o módulo local e entre na cidade.";
+            if (installation.State is ClientModuleInstallationState.Missing or ClientModuleInstallationState.Outdated or ClientModuleInstallationState.Unknown)
+                return installation.Reason + " " + installation.SuggestedAction;
+            if (installation.State == ClientModuleInstallationState.ReadyOnDisk)
+            {
+                var detail = string.IsNullOrWhiteSpace(native?.Message) ? "" : " " + native.Message;
+                return installation.ModuleLoaded == true
+                    ? "O ASI está carregado, mas a comunicação local ainda não respondeu. Clique em Verificar novamente." + detail
+                    : "Arquivo atualizado; o FiveM ainda não confirmou carregamento. Reinicie após preparar o módulo e entre numa cidade que permita plugins." + detail;
+            }
+            return !string.IsNullOrWhiteSpace(native?.Message) ? native.Message : "Aguardando a conexão do módulo local. Clique em Verificar novamente.";
+        }
+        if (_lastStatus is not { Ready: true, PlayerOnline: true })
+            return string.IsNullOrWhiteSpace(_lastStatus?.Message) ? "Módulo conectado. Aguarde um personagem válido dentro da cidade." : _lastStatus.Message;
+        if (!_lastStatus.SessionActive) return "Módulo conectado. Aguarde a confirmação da configuração do personagem.";
+        if (capability is not null && !_lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase))
+            return "O módulo conectado ainda não confirmou suporte para esta função. Consulte a aba Conexão.";
+        if (_reviving || _suiciding || _vehicleActionPending) return "Aguarde a ação atual terminar.";
+        return "";
+    }
+
+    private void UpdateActionBlockMessages()
+    {
+        var reason = NativeActionBlockReason();
+        if (!_reviving && !_suiciding && DateTimeOffset.UtcNow >= _playerActionFeedbackUntilUtc)
+        {
+            if (!string.IsNullOrEmpty(reason))
+            {
+                _lastPlayerBlockReason = reason;
+                _playerActionStatus.Text = reason;
+                _playerActionStatus.ForeColor = Theme.Warning;
+            }
+            else if (_playerActionStatus.Text == _lastPlayerBlockReason)
+            {
+                _playerActionStatus.Text = "Ações locais disponíveis. Suicídio pede confirmação.";
+                _playerActionStatus.ForeColor = Theme.Muted;
+                _lastPlayerBlockReason = null;
+            }
+        }
+        if (!_vehicleActionPending && DateTimeOffset.UtcNow >= _vehicleActionFeedbackUntilUtc)
+        {
+            if (!string.IsNullOrEmpty(reason))
+            {
+                _lastVehicleBlockReason = reason;
+                _vehicleActionStatus.Text = reason;
+                _vehicleActionStatus.ForeColor = Theme.Warning;
+            }
+            else if (_vehicleActionStatus.Text == _lastVehicleBlockReason)
+            {
+                _vehicleActionStatus.Text = "Entre no carro ou aproxime-se dele até 8 metros.";
+                _vehicleActionStatus.ForeColor = Theme.Muted;
+                _lastVehicleBlockReason = null;
+            }
+        }
+    }
+
+    private void RegisterDisabledControlTooltip(Control control)
+    {
+        // Disabled WinForms controls do not receive mouse messages, so show the reason from their card.
+        if (control.Parent is not { } parent || !_tooltipParents.Add(parent)) return;
+        parent.MouseMove += (_, args) =>
+        {
+            var hovered = parent.Controls.Cast<Control>().FirstOrDefault(child =>
+                !child.Enabled && child.Visible && child.Bounds.Contains(args.Location) && _disabledControlReasons.ContainsKey(child));
+            if (ReferenceEquals(hovered, _disabledTooltipControl)) return;
+            _disabledTooltipControl = hovered;
+            _tooltips.Hide(parent);
+            if (hovered is not null)
+                _tooltips.Show(_disabledControlReasons[hovered], parent, args.X + 12, args.Y + 20, 5000);
+        };
+        parent.MouseLeave += (_, _) =>
+        {
+            _disabledTooltipControl = null;
+            _tooltips.Hide(parent);
+        };
     }
 
     private async Task ReviveAsync()
@@ -920,6 +1110,7 @@ internal sealed class MainForm : Form
             const string message = "Personagem vivo observado no jogo; confirme o estado médico na cidade.";
             _playerActionStatus.Text = message;
             _playerActionStatus.ForeColor = Theme.Text;
+            _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             _revisionLabel.Text = message;
             AppendLog(message);
         }
@@ -931,6 +1122,7 @@ internal sealed class MainForm : Form
                 var message = "Reviver nativo não confirmado: " + error.Message;
                 _playerActionStatus.Text = message;
                 _playerActionStatus.ForeColor = Theme.Warning;
+                _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
                 _revisionLabel.Text = message;
                 AppendLog(message);
             }
@@ -952,6 +1144,7 @@ internal sealed class MainForm : Form
     private bool CanInvokeLocalAction(string capability) =>
         !_closing && !_disconnecting && _healthy && _client.DetectionEnabled && _session is not null &&
         _lastStatus is { Ready: true, PlayerOnline: true, SessionActive: true } &&
+        (!UsesClientModule || _lastStatus.NativeClient is { Ready: true }) &&
         _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
 
     private bool CanInvokeSuicide() => CanInvokeLocalAction("player.suicide");
@@ -973,6 +1166,7 @@ internal sealed class MainForm : Form
         {
             _playerActionStatus.Text = "A sessão local mudou. Confirme novamente a ação no personagem atual.";
             _playerActionStatus.ForeColor = Theme.Warning;
+            _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             return;
         }
 
@@ -1003,6 +1197,7 @@ internal sealed class MainForm : Form
                 : "Vida zero observada; confirme a morte na cidade.";
             _playerActionStatus.Text = message;
             _playerActionStatus.ForeColor = Theme.Text;
+            _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             _revisionLabel.Text = message;
             AppendLog(message);
         }
@@ -1013,6 +1208,7 @@ internal sealed class MainForm : Form
             var message = "Suicídio não confirmado: " + error.Message;
             _playerActionStatus.Text = message;
             _playerActionStatus.ForeColor = Theme.Warning;
+            _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             _revisionLabel.Text = message;
             AppendLog(message);
         }
@@ -1048,6 +1244,7 @@ internal sealed class MainForm : Form
         {
             _vehicleActionStatus.Text = "A sessão local mudou. Confirme novamente a ação no personagem atual.";
             _vehicleActionStatus.ForeColor = Theme.Warning;
+            _vehicleActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             return;
         }
 
@@ -1074,6 +1271,7 @@ internal sealed class MainForm : Form
                 : "Portas desbloqueadas observadas no jogo. Scripts de chaves podem alterar o estado novamente.";
             _vehicleActionStatus.Text = message;
             _vehicleActionStatus.ForeColor = Theme.Text;
+            _vehicleActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             _revisionLabel.Text = message;
             AppendLog(message);
         }
@@ -1084,6 +1282,7 @@ internal sealed class MainForm : Form
             var message = $"{action} carro não confirmado: {error.Message}";
             _vehicleActionStatus.Text = message;
             _vehicleActionStatus.ForeColor = Theme.Warning;
+            _vehicleActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
             _revisionLabel.Text = message;
             AppendLog(message);
         }
@@ -1142,6 +1341,10 @@ internal sealed class MainForm : Form
         _reviving = false;
         _suiciding = false;
         _vehicleActionPending = false;
+        _playerActionFeedbackUntilUtc = DateTimeOffset.MinValue;
+        _vehicleActionFeedbackUntilUtc = DateTimeOffset.MinValue;
+        _lastPlayerBlockReason = null;
+        _lastVehicleBlockReason = null;
         _playerActionStatus.Text = "Ações locais exigem uma sessão ativa. Suicídio pede confirmação.";
         _playerActionStatus.ForeColor = Theme.Muted;
         _vehicleActionStatus.Text = UsesClientModule

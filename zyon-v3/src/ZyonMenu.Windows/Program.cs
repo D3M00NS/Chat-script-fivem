@@ -34,7 +34,19 @@ internal static class Program
             }
             return;
         }
-        Application.Run(requestAdministration
-            ? new AdminMainForm() : new MainForm(requestClientModule ? new ClientModuleSession() : null));
+        if (requestAdministration)
+        {
+            Application.Run(new AdminMainForm());
+            return;
+        }
+        while (true)
+        {
+            using var menu = new MainForm(requestClientModule ? new ClientModuleSession() : null);
+            Application.Run(menu);
+            if (!menu.ClientModuleRequested) break;
+            // The closed form has stopped and disposed its old provider before
+            // opening the client module. Keep this process's existing mutex.
+            requestClientModule = true;
+        }
     }
 }

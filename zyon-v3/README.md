@@ -1,4 +1,4 @@
-# Zyon 3.3.0 — módulo somente no cliente
+# Zyon 3.3.1 — módulo somente no cliente
 
 Versão de teste para Windows x64 e FiveM b3258. O executável inclui o módulo nativo `ZyonClient.asi` e oferece sua instalação na pasta local do FiveM. Nenhum recurso é instalado no servidor, e o modo **CLIENTE LOCAL** não verifica cargo de administrador ou a permissão ACE `zyon.modmenu`.
 
@@ -6,15 +6,15 @@ O módulo usa o carregamento oficial de plugins do FiveM. O servidor deve **já 
 
 ## Abrir e atualizar
 
-1. Feche o FiveM e a versão anterior do menu. Extraia o [pacote completo](../downloads/ZyonMenu-v3.3.0-completo.zip) em uma pasta nova.
-2. Abra `ZyonMenu.exe` ou `Abrir-modulo-local.cmd`. Confira **3.3.0** e **CLIENTE LOCAL** no título.
-3. Na engrenagem/Conexão, clique em **Preparar módulo local** e selecione sua pasta `FiveM.app`. Repita esta etapa mesmo se já instalou a 3.2.0: o novo protocolo exige aplicativo e ASI atualizados juntos.
+1. Feche o FiveM e a versão anterior do menu. Extraia o [pacote completo](../downloads/ZyonMenu-v3.3.1-completo.zip) em uma pasta nova.
+2. Abra `ZyonMenu.exe` ou `Abrir-modulo-local.cmd`. Confira **3.3.1** e **CLIENTE LOCAL** no título. Se estiver no externo, o banner oferece **Usar cliente local**.
+3. Clique em **Preparar módulo** e selecione sua pasta `FiveM.app`. Repita esta etapa mesmo se já instalou a 3.3.0: o ASI inclui a correção do diagnóstico de inicialização. O seletor prioriza a instalação detectada no jogo.
 4. Abra o FiveM novamente, entre no servidor e aguarde o módulo conectado e suas capacidades aparecerem no menu.
 5. Teste uma função de cada vez e use **Salvar diagnóstico** para registrar o resultado.
 
-Somente `plugins/ZyonClient.asi` e seu registro de instalação são gravados no cliente; uma versão anterior recebe backup `.bak`. O pacote completo inclui o runtime. O compacto requer .NET Desktop Runtime 8 x64. O modo externo permanece acessível com `ZyonMenu.exe --external` ou `Abrir-somente-externo.cmd`; feche o modo atual antes de trocar.
+Somente `plugins/ZyonClient.asi` e seu registro de instalação são gravados na instalação do FiveM; uma versão anterior recebe backup `.bak`. A última pasta escolhida fica nas preferências locais do Zyon. O pacote completo inclui o runtime. O compacto requer .NET Desktop Runtime 8 x64. O modo externo permanece acessível com `ZyonMenu.exe --external` ou `Abrir-somente-externo.cmd`.
 
-Se o módulo permanecer **desconectado**, confira primeiro o modo, a instalação da versão atual e o carregamento do plugin. Exporte o diagnóstico com o FiveM aberto. Esse estado não prova falta de cargo administrativo no servidor; a integração administrativa antiga usa outro modo e outra autorização.
+O banner fica visível em todas as abas e distingue arquivo ausente/desatualizado, outra build, várias sessões, arquivo instalado sem confirmação de carregamento e erro do runtime nativo. Os cartões de personagem e veículo mostram o bloqueio atual. Uma conexão de memória não habilita operações nativas. Consulte [carregamento e recuperação](docs/client-module-3.3.1.md).
 
 ## Funções implementadas para teste
 

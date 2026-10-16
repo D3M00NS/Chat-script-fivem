@@ -23,6 +23,7 @@ var suites = new List<(string Name, Action Body)>
     ("external observation readback and diagnostic snapshots", () => assertions += ExternalObservationChecks.Run()),
     ("external one-shot health actions and stale work", () => assertions += ExternalHealthActionChecks.Run()),
     ("client-module protocol framing and named pipe transport", () => assertions += ClientModuleProtocolChecks.Run()),
+    ("client-module installation hashes and bounded metadata", () => assertions += ClientModuleInstallationChecks.Run()),
     ("client-module provider settings, actions and lifecycle", () => assertions += ClientModuleSessionChecks.Run())
 };
 

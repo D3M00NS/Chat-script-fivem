@@ -13,6 +13,7 @@
     <Compile Include="../../src/ZyonMenu.Windows/ExternalReadback.cs" Link="ExternalReadback.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/LocalRuntimeTelemetry.cs" Link="LocalRuntimeTelemetry.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ExternalHealthAction.cs" Link="ExternalHealthAction.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/ClientModuleInstallation.cs" Link="ClientModuleInstallation.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ClientModuleSession.cs" Link="ClientModuleSession.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ILocalGameSession.cs" Link="ILocalGameSession.cs" />
   </ItemGroup>

@@ -16,3 +16,8 @@ mkdir -p "$zyon_project_root/.build"
     "$zyon_project_root/native/zyon-client/tests/DirectedFireTests.cpp" \
     -o "$zyon_project_root/.build/zyon-native-directed-fire-tests"
 "$zyon_project_root/.build/zyon-native-directed-fire-tests"
+"$zyon_cxx_command" -std=c++17 -Wall -Wextra -Werror -pedantic \
+    -I "$zyon_project_root/native/zyon-client/include" \
+    "$zyon_project_root/native/zyon-client/tests/StatusSnapshotTests.cpp" \
+    -o "$zyon_project_root/.build/zyon-native-status-snapshot-tests"
+"$zyon_project_root/.build/zyon-native-status-snapshot-tests"

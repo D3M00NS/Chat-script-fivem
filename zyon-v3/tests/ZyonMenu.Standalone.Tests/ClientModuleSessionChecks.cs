@@ -137,6 +137,8 @@ internal static class ClientModuleSessionChecks
         checks.That(status.Ready && status.PlayerId == 101 && status.Capabilities.Contains("player.noclip") &&
             !status.Capabilities.Contains("aim.enabled"),
             "A native-only session must expose native capabilities without inventing memory readiness.");
+        checks.That(status.NativeClient is { Ready: true, TransportConnected: true, ProcessId: 101 },
+            "Native transport and execution readiness must be independently visible to the UI.");
         checks.That(external.Pushed.Count == 0, "An unavailable external provider must not receive native-only settings.");
         settings.Aim.Enabled = true;
         await checks.ThrowsAsync<InvalidOperationException>(() => provider.PushSettingsAsync(settings),
@@ -180,6 +182,8 @@ internal static class ClientModuleSessionChecks
         var status = await provider.GetStatusAsync();
         checks.That(!status.Capabilities.Contains("player.revive") && status.Capabilities.Contains("aim.enabled"),
             "Different external and native PIDs must suppress native capabilities without mixing player identities.");
+        checks.That(status.Ready && status.NativeClient is { TransportConnected: true, Ready: false },
+            "A ready memory reader must not disguise an unready native module in the connection presentation.");
         await checks.ThrowsAsync<InvalidOperationException>(() => provider.ReviveAsync(oldPid),
             "A PID mismatch must reject native actions even when both independent providers claim readiness.");
         checks.That(pipe.Count(ClientModuleKind.Action) == 0 && external.Revives == 0,

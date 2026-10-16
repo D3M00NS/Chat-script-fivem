@@ -3,5 +3,6 @@ namespace ZyonMenu.Windows;
 
 internal sealed partial class ClientModuleSession
 {
-    public ClientModuleSession() : this(new LocalGameSession(), DiscoverProcess, ConnectPipeAsync) { }
+    public ClientModuleSession() : this(new LocalGameSession(), DiscoverProcess, ConnectPipeAsync,
+        () => ClientModuleInstallation.Refresh(force: true)) { }
 }
