@@ -26,18 +26,23 @@ internal sealed class MainForm : Form
     private readonly Button _disconnect = Theme.Button("Desconectar");
     private readonly Button _saveDiagnostic = Theme.Button("Salvar diagnóstico");
     private readonly Button _revive = Theme.Button("Reviver indisponível");
+    private readonly Button _suicide = Theme.Button("Suicídio");
+    private readonly Label _playerActionStatus = Theme.Label("Ações locais exigem uma sessão ativa. Suicídio pede confirmação.", true);
     private readonly DataGridView _featureStates = new();
-    private readonly LocalGameSession _client = new();
+    private readonly ILocalGameSession _client;
+    private bool UsesClientModule => _client is ClientModuleSession;
     private readonly StandaloneUiPolicy _policy = new();
     private readonly HashSet<string> _knownCapabilities = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime = new();
     private CancellationTokenSource? _session;
+    private Task? _settingsRequest;
     private ServerStatus? _lastStatus;
     private bool _healthy;
     private bool _polling;
     private bool _sending;
     private bool _disconnecting;
     private bool _reviving;
+    private bool _suiciding;
     private bool _closing;
     private bool _dirty = true;
     private bool _synchronizing;
@@ -57,9 +62,12 @@ internal sealed class MainForm : Form
         return settings;
     }
 
-    public MainForm()
+    public MainForm(ILocalGameSession? client = null)
     {
-        Text = AppIdentity.StandaloneTitle;
+        _client = client ?? new LocalGameSession();
+        Text = UsesClientModule ? AppIdentity.ClientModuleTitle : AppIdentity.StandaloneTitle;
+        if (UsesClientModule)
+            _connectionDetails.Text = "Prepare o módulo local e mantenha o FiveM aberto. Nenhuma instalação no servidor é necessária.";
         Size = new Size(1100, 790);
         MinimumSize = new Size(950, 660);
         StartPosition = FormStartPosition.CenterScreen;
@@ -84,6 +92,7 @@ internal sealed class MainForm : Form
         _disconnect.Click += async (_, _) => await DisconnectAsync();
         _saveDiagnostic.Click += (_, _) => SaveDiagnostic();
         _revive.Click += async (_, _) => await ReviveAsync();
+        _suicide.Click += async (_, _) => await SuicideAsync();
         FormClosing += OnFormClosing;
         Shown += async (_, _) =>
         {
@@ -143,10 +152,10 @@ internal sealed class MainForm : Form
 
         var main = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background };
         var header = new Panel { Dock = DockStyle.Top, Height = 124, Padding = new Padding(26, 15, 26, 8), BackColor = Theme.Background };
-        var title = Theme.Label($"ZYON {AppIdentity.DisplayVersion}  /  STANDALONE");
+        var title = Theme.Label($"ZYON {AppIdentity.DisplayVersion}  /  {(UsesClientModule ? "CLIENTE LOCAL" : "STANDALONE")}");
         title.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
         title.Location = new Point(26, 16);
-        var subtitle = Theme.Label("FiveM b3258 · processo local · configuração independente", true);
+        var subtitle = Theme.Label(UsesClientModule ? "FiveM · módulo local e processo b3258" : "FiveM b3258 · processo local · configuração independente", true);
         subtitle.Location = new Point(27, 45);
         _connectionLabel.AutoSize = false;
         _connectionLabel.Size = new Size(290, 24);
@@ -218,7 +227,7 @@ internal sealed class MainForm : Form
         var page = NewPage("Aim");
         page.Controls.Add(AimCard("Aimbot Aim", _settings.Aim, "aim"));
         var silentCard = Card("Silent Aim · indisponível", 408, 188);
-        AddNote(silentCard, "Silent Aim externo ainda não implementado. Esta versão não altera a direção dos tiros com essa função. Não há ativação disponível neste perfil.", 62, 360);
+        AddNote(silentCard, "Silent Aim ainda não implementado neste perfil. Não há ativação disponível até existir suporte confirmado.", 62, 360);
         page.Controls.Add(silentCard);
         page.Controls.Add(WeaponsCard(408));
         var note = Card("Configuração local", 408, 258);
@@ -244,18 +253,33 @@ internal sealed class MainForm : Form
     private void BuildPlayerPage()
     {
         var page = NewPage("Player");
-        var card = Card("Personagem", 408, 250);
+        var height = UsesClientModule ? 368 : 326;
+        var card = Card("Personagem", 408, height);
         AddToggle(card, "GodMode", () => _settings.Player.GodMode, v => _settings.Player.GodMode = v, "player.godMode", 64);
-        _revive.Text = "Reviver indisponível";
-        _tooltips.SetToolTip(_revive, "Reviver externo ainda não implementado neste perfil.");
-        _revive.Location = new Point(20, 124);
+        if (UsesClientModule)
+            AddToggle(card, "Invisibilidade", () => _settings.Player.Invisible, v => _settings.Player.Invisible = v, "player.invisible", 106);
+        var buttonTop = UsesClientModule ? 166 : 124;
+        _revive.Text = UsesClientModule ? "Reviver (nativo)" : "Reviver indisponível";
+        _tooltips.SetToolTip(_revive, UsesClientModule
+            ? "Ressuscita o personagem local pelo jogo. Não remove coma ou hospital de ESX/QBCore."
+            : "Reviver externo ainda não implementado neste perfil.");
+        _revive.Location = new Point(20, buttonTop);
         _revive.Width = 220;
         card.Controls.Add(_revive);
         RegisterCapability("player.revive", _revive);
-        AddNote(card, "Reviver externo ainda não implementado.", 184, 360);
+        _suicide.Location = new Point(20, buttonTop + 52);
+        _suicide.Width = 220;
+        _tooltips.SetToolTip(_suicide, "Pede confirmação, desativa GodMode e define a vida local como zero. O fluxo médico da cidade pode tratar a morte de outra forma.");
+        _playerActionStatus.AutoSize = false;
+        _playerActionStatus.Location = new Point(20, buttonTop + 104);
+        _playerActionStatus.Size = new Size(360, 76);
+        card.Controls.AddRange(new Control[] { _suicide, _playerActionStatus });
+        RegisterCapability("player.suicide", _suicide);
         page.Controls.Add(card);
-        var note = Card("Estado do personagem", 408, 250);
-        AddNote(note, "GodMode pode ser preparado localmente e depende de um personagem validado. Consulte Situação das funções para distinguir configuração recebida de valores confirmados em leitura.\n\nReviver e noclip permanecem indisponíveis neste perfil externo.", 62, 360);
+        var note = Card("Estado do personagem", 408, height);
+        AddNote(note, UsesClientModule
+            ? "As opções dependem do módulo local conectado ao FiveM. Consulte Situação das funções para ver as confirmações do cliente.\n\nReviver nativo observa o personagem vivo no jogo; não remove o estado de coma ou hospital do ESX/QBCore.\n\nSuicídio define a vida como zero após confirmação e desativa GodMode. Confirme a morte na cidade."
+            : "GodMode pode ser preparado localmente e depende de um personagem validado. Consulte Situação das funções para distinguir configuração recebida de valores confirmados em leitura.\n\nSuicídio define a vida local como zero após confirmação e desativa GodMode. Confirme a morte dentro da cidade. Reviver e noclip permanecem indisponíveis neste perfil externo.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -281,14 +305,16 @@ internal sealed class MainForm : Form
     private void BuildNoclipPage()
     {
         var page = NewPage("Noclip");
-        var card = Card("Noclip externo · indisponível", 408, 215);
-        AddToggle(card, "Noclip indisponível", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 64);
+        var card = Card(UsesClientModule ? "Noclip / voar" : "Noclip externo · indisponível", 408, 215);
+        AddToggle(card, UsesClientModule ? "Ativar noclip" : "Noclip indisponível", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 64);
         AddSlider(card, "Velocidade (m/s)", 1, 50, _settings.Player.NoclipSpeed,
             v => _settings.Player.NoclipSpeed = v, "player.noclip", 108);
-        AddNote(card, "Noclip externo ainda não implementado.", 166, 360);
+        AddNote(card, UsesClientModule ? "A velocidade muda durante o voo." : "Noclip externo ainda não implementado.", 166, 360);
         page.Controls.Add(card);
-        var note = Card("Disponibilidade", 408, 215);
-        AddNote(note, "Movimento e velocidade do noclip não são enviados ao jogo por esta versão. O controle de velocidade permanece visível e desativado enquanto essa função não tem suporte real.", 62, 360);
+        var note = Card(UsesClientModule ? "Controles no FiveM" : "Disponibilidade", 408, 248);
+        AddNote(note, UsesClientModule
+            ? "W / A / S / D · mover conforme a câmera\nEspaço · subir\nCtrl · descer\nShift · acelerar enquanto pressionado\n\nInsert · ocultar o menu e voltar ao jogo. A sessão do módulo local precisa permanecer conectada."
+            : "Movimento e velocidade do noclip não são enviados ao jogo por esta versão. O controle de velocidade permanece visível e desativado enquanto essa função não tem suporte real.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -297,7 +323,9 @@ internal sealed class MainForm : Form
         var page = NewPage("Weapons");
         page.Controls.Add(WeaponsCard(408));
         var note = Card("Armas", 408, 220);
-        AddNote(note, "No Recoil e No Spread só ficam disponíveis quando o perfil confirma os campos da arma. Configuração recebida não confirma efeito no jogo; consulte a situação de cada função. Freeze Ammo externo ainda não implementado.", 62, 360);
+        AddNote(note, UsesClientModule
+            ? "No Recoil e No Spread dependem dos campos confirmados no processo b3258. Freeze Ammo usa o módulo local conectado. Consulte a situação de cada função e confira o comportamento no jogo."
+            : "No Recoil e No Spread só ficam disponíveis quando o perfil confirma os campos da arma. Configuração recebida não confirma efeito no jogo; consulte a situação de cada função. Freeze Ammo externo ainda não implementado.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -306,7 +334,7 @@ internal sealed class MainForm : Form
         var card = Card("Weapons Settings", width, 212);
         AddToggle(card, "No Recoil", () => _settings.Weapons.NoRecoil, v => _settings.Weapons.NoRecoil = v, "weapons.noRecoil", 64);
         AddToggle(card, "No Spread", () => _settings.Weapons.NoSpread, v => _settings.Weapons.NoSpread = v, "weapons.noSpread", 106);
-        AddToggle(card, "Freeze Ammo · indisponível", () => _settings.Weapons.FreezeAmmo, v => _settings.Weapons.FreezeAmmo = v, "weapons.freezeAmmo", 148);
+        AddToggle(card, UsesClientModule ? "Freeze Ammo" : "Freeze Ammo · indisponível", () => _settings.Weapons.FreezeAmmo, v => _settings.Weapons.FreezeAmmo = v, "weapons.freezeAmmo", 148);
         return card;
     }
 
@@ -315,7 +343,7 @@ internal sealed class MainForm : Form
         var page = NewPage("Connection");
         var featureCard = BuildFeatureStatusCard();
         page.Controls.Add(featureCard);
-        var card = Card("Detecção do processo local", 834, 315);
+        var card = Card(UsesClientModule ? "Módulo do cliente e processo local" : "Detecção do processo local", 834, 315);
         var processLabel = Theme.Label("Processo detectado");
         processLabel.Location = new Point(20, 60);
         _process.Dock = DockStyle.None;
@@ -325,7 +353,7 @@ internal sealed class MainForm : Form
         _process.Text = "Aguardando FiveM_b3258_GTAProcess.exe…";
         _process.ReadOnly = true;
         _process.AccessibleName = "Processo local detectado automaticamente";
-        var note = Theme.Label("Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
+        var note = Theme.Label(UsesClientModule ? "Abra o FiveM com o módulo local preparado. As funções nativas aguardam a conexão do cliente." : "Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
         note.Location = new Point(20, 137);
         note.AutoSize = false;
         note.Size = new Size(790, 42);
@@ -337,6 +365,14 @@ internal sealed class MainForm : Form
         _connectionDetails.Size = new Size(790, 55);
         _connectionDetails.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         card.Controls.AddRange(new Control[] { processLabel, _process, note, _connect, _disconnect, _connectionDetails });
+        if (UsesClientModule)
+        {
+            var setupModule = Theme.Button("Preparar módulo local", true);
+            setupModule.Location = new Point(350, 187);
+            setupModule.Width = 220;
+            setupModule.Click += (_, _) => ClientModuleInstaller.ShowSetup(this);
+            card.Controls.Add(setupModule);
+        }
         page.Controls.Add(card);
 
         var events = Card("Eventos e diagnóstico", 834, 263);
@@ -417,8 +453,10 @@ internal sealed class MainForm : Form
         if (reported.Count == 0)
         {
             _featureStates.Rows.Add("Backend local", "Sem confirmação", "Aguardando um processo e um personagem compatíveis.");
-            foreach (var feature in new[] { "Silent Aim", "Reviver", "Noclip / voar", "Freeze Ammo" })
-                _featureStates.Rows.Add(feature, "Não implementada", "Indisponível neste perfil externo.");
+            _featureStates.Rows.Add("Silent Aim", "Não implementada", "Indisponível neste perfil.");
+            foreach (var feature in new[] { "Reviver", "Noclip / voar", "Freeze Ammo" })
+                _featureStates.Rows.Add(feature, UsesClientModule ? "Aguardando módulo local" : "Não implementada",
+                    UsesClientModule ? "Prepare o módulo local e aguarde a conexão do FiveM." : "Indisponível neste perfil externo.");
             RestorePosition();
             return;
         }
@@ -495,11 +533,11 @@ internal sealed class MainForm : Form
         if (capability == "weapons.noRecoil")
             _tooltips.SetToolTip(toggle, "Só será aplicado se o perfil b3258 confirmar os campos de recuo da arma.");
         if (capability == "weapons.freezeAmmo")
-            _tooltips.SetToolTip(toggle, "Freeze Ammo externo ainda não implementado.");
+            _tooltips.SetToolTip(toggle, UsesClientModule ? "Usa o módulo local conectado para manter a munição da arma." : "Freeze Ammo externo ainda não implementado.");
         if (capability == "player.godMode")
             _tooltips.SetToolTip(toggle, "Estado local de dano. Scripts da cidade podem alterar saúde e estado de morte separadamente.");
         if (capability == "player.noclip")
-            _tooltips.SetToolTip(toggle, "Noclip externo ainda não implementado. O ajuste permanece desativado.");
+            _tooltips.SetToolTip(toggle, UsesClientModule ? "Move o personagem pelo módulo local; a velocidade é aplicada durante o voo." : "Noclip externo ainda não implementado. O ajuste permanece desativado.");
         if (capability is "aim.visibility" or "esp.visibility")
             _tooltips.SetToolTip(toggle, "Linha de visão não confirmada para o perfil b3258.");
         if (capability == "esp.names")
@@ -597,7 +635,7 @@ internal sealed class MainForm : Form
         }
         _connectionLabel.Text = "AGUARDANDO FIVEM";
         _connectionLabel.ForeColor = Theme.Warning;
-        _connectionDetails.Text = "Procurando FiveM_b3258_GTAProcess.exe e um personagem local válido…";
+        _connectionDetails.Text = UsesClientModule ? "Aguardando o módulo no cliente FiveM e os dados locais do processo b3258…" : "Procurando FiveM_b3258_GTAProcess.exe e um personagem local válido…";
         _revisionLabel.Text = "Escolhas locais pendentes; nenhum recebimento confirmado pelo backend.";
         _poll.Start();
         UpdateAvailability();
@@ -606,7 +644,7 @@ internal sealed class MainForm : Form
 
     private async Task SendSettingsAsync()
     {
-        if (_sending || _disconnecting || !_dirty || !_healthy || !_client.DetectionEnabled ||
+        if (_sending || _suiciding || _reviving || _disconnecting || !_dirty || !_healthy || !_client.DetectionEnabled ||
             _lastStatus is not { Ready: true, PlayerOnline: true } || _session is null) return;
         var cancellation = _session.Token;
         var generation = _connectionGeneration;
@@ -616,7 +654,9 @@ internal sealed class MainForm : Form
         _revisionLabel.Text = "Enviando configuração ao backend local…";
         try
         {
-            await _client.PushSettingsAsync(snapshot, cancellation);
+            var request = _client.PushSettingsAsync(snapshot, cancellation);
+            _settingsRequest = request;
+            await request;
             if (generation != _connectionGeneration || _closing) return;
             _dirty = changeVersion != _changeVersion;
             _revisionLabel.Text = _dirty ? "Novas escolhas locais aguardando envio…" : "Configuração enviada; aguardando recebimento pelo backend…";
@@ -634,7 +674,14 @@ internal sealed class MainForm : Form
             AppendLog("Aplicação local falhou: " + error.Message);
             UpdateAvailability();
         }
-        finally { if (generation == _connectionGeneration) _sending = false; }
+        finally
+        {
+            if (generation == _connectionGeneration)
+            {
+                _sending = false;
+                _settingsRequest = null;
+            }
+        }
     }
 
     private async Task PollAsync()
@@ -762,17 +809,22 @@ internal sealed class MainForm : Form
         _connect.Text = _client.DetectionEnabled ? "Detectando FiveM" : "Detectar FiveM";
         _disconnect.Enabled = _client.DetectionEnabled && !_closing && !_disconnecting;
         var capabilities = _knownCapabilities;
-        _revive.Text = "Reviver indisponível";
+        _revive.Text = UsesClientModule ? "Reviver (nativo)" : "Reviver indisponível";
         foreach (var (capability, controls) in _capabilityControls)
         {
             var enabled = !_disconnecting && !_closing && StandaloneUiPolicy.CanEditConfiguration(capability, _capabilitiesKnown, capabilities);
             if (capability == "player.revive")
-                enabled = !_disconnecting && !_closing && !_reviving && _lastStatus is not null &&
-                    StandaloneUiPolicy.CanInvokeAction(capability, _healthy, _lastStatus.Ready, _lastStatus.PlayerOnline, _lastStatus.SessionActive, capabilities);
+                enabled = UsesClientModule && !_reviving && !_suiciding && CanInvokeLocalAction(capability);
+            if (capability == "player.suicide")
+                enabled = !_suiciding && !_reviving && CanInvokeSuicide();
+            if (UsesClientModule && capability is ("player.godMode" or "player.noclip" or "player.invisible" or "weapons.freezeAmmo"))
+                enabled = !_suiciding && !_reviving && CanInvokeLocalAction(capability);
+            if (capability == "player.godMode" && (_suiciding || _reviving))
+                enabled = false;
             if (capability is "weapons.noRecoil" or "weapons.noSpread")
                 enabled &= _healthy && _lastStatus is { Ready: true, PlayerOnline: true } &&
                     _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
-            if (capability is "silent" or "player.revive" or "player.noclip" or "weapons.freezeAmmo")
+            if (capability == "silent" || (!UsesClientModule && capability is ("player.revive" or "player.noclip" or "weapons.freezeAmmo")))
                 enabled = false;
             foreach (var control in controls) control.Enabled = enabled;
         }
@@ -780,25 +832,42 @@ internal sealed class MainForm : Form
 
     private async Task ReviveAsync()
     {
-        if (_reviving || !_revive.Enabled || _session is null) return;
-        var cancellation = _session.Token;
+        if (!UsesClientModule || _reviving || _suiciding || !CanInvokeLocalAction("player.revive")) return;
+        var cancellation = _session!.Token;
         var generation = _connectionGeneration;
+        var processId = _lastStatus!.PlayerId;
+        var playerEpoch = _client.PlayerEpoch;
+        var priorSettings = _settingsRequest;
         _reviving = true;
+        _debounce.Stop();
+        _playerActionStatus.Text = "Aguardando o reviver nativo no cliente local…";
+        _playerActionStatus.ForeColor = Theme.Muted;
         UpdateAvailability();
         try
         {
-            await _client.ReviveAsync(cancellation);
+            if (priorSettings is not null) await priorSettings.WaitAsync(cancellation);
+            cancellation.ThrowIfCancellationRequested();
             if (generation != _connectionGeneration || _closing) return;
-            AppendLog("Ação de reviver solicitada ao backend local.");
+            if (!CanInvokeLocalAction("player.revive") || _lastStatus?.PlayerId != processId || _client.PlayerEpoch != playerEpoch)
+                throw new InvalidOperationException("O personagem local mudou; tente a ação novamente no personagem atual.");
+            await _client.ReviveAsync(playerEpoch, cancellation);
+            if (generation != _connectionGeneration || _closing) return;
+            const string message = "Personagem vivo observado no jogo; confirme o estado médico na cidade.";
+            _playerActionStatus.Text = message;
+            _playerActionStatus.ForeColor = Theme.Text;
+            _revisionLabel.Text = message;
+            AppendLog(message);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception error)
         {
             if (generation == _connectionGeneration && !_closing)
             {
-                AppendLog("Reviver não confirmado: " + error.Message);
-                ObserveUnavailableBackend();
-                _connectionDetails.Text = error.Message;
+                var message = "Reviver nativo não confirmado: " + error.Message;
+                _playerActionStatus.Text = message;
+                _playerActionStatus.ForeColor = Theme.Warning;
+                _revisionLabel.Text = message;
+                AppendLog(message);
             }
         }
         finally
@@ -806,7 +875,92 @@ internal sealed class MainForm : Form
             if (generation == _connectionGeneration)
             {
                 _reviving = false;
-                if (!_closing) UpdateAvailability();
+                if (!_closing)
+                {
+                    UpdateAvailability();
+                    if (_dirty && _healthy && _client.DetectionEnabled && !_debounce.Enabled) _debounce.Start();
+                }
+            }
+        }
+    }
+
+    private bool CanInvokeLocalAction(string capability) =>
+        !_closing && !_disconnecting && _healthy && _client.DetectionEnabled && _session is not null &&
+        _lastStatus is { Ready: true, PlayerOnline: true, SessionActive: true } &&
+        _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
+
+    private bool CanInvokeSuicide() => CanInvokeLocalAction("player.suicide");
+
+    private async Task SuicideAsync()
+    {
+        if (_suiciding || _reviving || !CanInvokeSuicide()) return;
+        var confirmedGeneration = _connectionGeneration;
+        var confirmedProcessId = _lastStatus!.PlayerId;
+        var confirmedPlayerEpoch = _client.PlayerEpoch;
+        if (MessageBox.Show(this,
+                UsesClientModule ? "Solicitar suicídio do personagem? GodMode e noclip serão desativados."
+                    : "Definir a vida do personagem como zero? GodMode será desativado.",
+                "Confirmar suicídio", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        if (_suiciding || _reviving || !CanInvokeSuicide()) return;
+        if (confirmedGeneration != _connectionGeneration || confirmedProcessId != _lastStatus!.PlayerId ||
+            confirmedPlayerEpoch != _client.PlayerEpoch)
+        {
+            _playerActionStatus.Text = "A sessão local mudou. Confirme novamente a ação no personagem atual.";
+            _playerActionStatus.ForeColor = Theme.Warning;
+            return;
+        }
+
+        var cancellation = _session!.Token;
+        var generation = _connectionGeneration;
+        var processId = _lastStatus!.PlayerId;
+        var priorSettings = _settingsRequest;
+        _suiciding = true;
+        _settings.Player.GodMode = false;
+        if (UsesClientModule) _settings.Player.Noclip = false;
+        SettingsChanged();
+        _debounce.Stop();
+        _playerActionStatus.Text = "Desativando GodMode e aguardando a operação local…";
+        _playerActionStatus.ForeColor = Theme.Muted;
+        UpdateAvailability();
+        try
+        {
+            // An older GodMode=true snapshot must finish before the action's
+            // backend reset. New snapshots remain paused until the action ends.
+            if (priorSettings is not null) await priorSettings.WaitAsync(cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            if (generation != _connectionGeneration || _closing) return;
+            if (!CanInvokeSuicide() || _lastStatus?.PlayerId != processId || _client.PlayerEpoch != confirmedPlayerEpoch)
+                throw new InvalidOperationException("A sessão local mudou; confirme novamente a ação no personagem atual.");
+            await _client.SuicideAsync(confirmedPlayerEpoch, cancellation);
+            if (generation != _connectionGeneration || _closing) return;
+            var message = UsesClientModule ? "Morte nativa observada; confirme o estado na cidade."
+                : "Vida zero observada; confirme a morte na cidade.";
+            _playerActionStatus.Text = message;
+            _playerActionStatus.ForeColor = Theme.Text;
+            _revisionLabel.Text = message;
+            AppendLog(message);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            if (generation != _connectionGeneration || _closing) return;
+            var message = "Suicídio não confirmado: " + error.Message;
+            _playerActionStatus.Text = message;
+            _playerActionStatus.ForeColor = Theme.Warning;
+            _revisionLabel.Text = message;
+            AppendLog(message);
+        }
+        finally
+        {
+            if (generation == _connectionGeneration)
+            {
+                _suiciding = false;
+                if (!_closing)
+                {
+                    UpdateAvailability();
+                    if (_dirty && _healthy && _client.DetectionEnabled && !_debounce.Enabled) _debounce.Start();
+                }
             }
         }
     }
@@ -846,9 +1000,13 @@ internal sealed class MainForm : Form
         UpdateFeatureStates(null);
         _healthy = false;
         _sending = false;
+        _settingsRequest = null;
         _polling = false;
         _disconnecting = false;
         _reviving = false;
+        _suiciding = false;
+        _playerActionStatus.Text = "Ações locais exigem uma sessão ativa. Suicídio pede confirmação.";
+        _playerActionStatus.ForeColor = Theme.Muted;
         _policy.Disconnect();
         ResetActiveEffects();
         _eventsCursor = 0;

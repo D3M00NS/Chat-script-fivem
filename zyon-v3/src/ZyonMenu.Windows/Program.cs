@@ -10,10 +10,20 @@ internal static class Program
     {
         ApplicationConfiguration.Initialize();
         bool requestAdministration = args.Contains("--admin", StringComparer.OrdinalIgnoreCase);
+        bool explicitClientModule = args.Contains("--client-module", StringComparer.OrdinalIgnoreCase);
+        bool requestExternal = args.Contains("--external", StringComparer.OrdinalIgnoreCase);
+        if (requestAdministration && explicitClientModule || requestExternal && (requestAdministration || explicitClientModule))
+        {
+            MessageBox.Show("Escolha apenas um modo ao iniciar o menu.", "Zyon", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        bool requestClientModule = !requestAdministration && !requestExternal;
+        var mode = requestAdministration ? LocalMenuMode.Administration : requestExternal
+            ? LocalMenuMode.External : LocalMenuMode.ClientModule;
         using var instance = StandaloneInstance.Acquire();
         if (!instance.IsOwner)
         {
-            var action = StandaloneInstance.HandleExistingInstance(requestAdministration, out var description);
+            var action = StandaloneInstance.HandleExistingInstance(mode, out var description);
             if (action != ExistingInstanceAction.Activate)
             {
                 string instructions = action == ExistingInstanceAction.ModeConflict
@@ -25,6 +35,6 @@ internal static class Program
             return;
         }
         Application.Run(requestAdministration
-            ? new AdminMainForm() : new MainForm());
+            ? new AdminMainForm() : new MainForm(requestClientModule ? new ClientModuleSession() : null));
     }
 }

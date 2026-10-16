@@ -25,6 +25,20 @@ internal static class ExistingInstanceChecks
             if (!condition) throw new InvalidOperationException(message);
         }
         var current = new Version(3, 1, 2, 0);
+        Check(ExistingInstancePolicy.TryParseModeWindowTitle("Zyon 3.2.0 — FiveM b3258 / cliente local", out var moduleVersion, out var moduleMode) &&
+            moduleVersion == new Version(3, 2, 0, 0) && moduleMode == LocalMenuMode.ClientModule,
+            "A client module must have a distinct startup identity.");
+        Check(ExistingInstancePolicy.Decide(new Version(3, 2, 0, 0), moduleVersion, LocalMenuMode.External, moduleMode) == ExistingInstanceAction.ModeConflict,
+            "Reopening the external backend must not silently activate a client-module session.");
+        Check(ExistingInstancePolicy.Decide(new Version(3, 2, 0, 0), moduleVersion, LocalMenuMode.ClientModule, LocalMenuMode.External) == ExistingInstanceAction.ModeConflict,
+            "A client-module launch must not reactivate the external backend.");
+        Check(ExistingInstancePolicy.Decide(new Version(3, 2, 0, 0), moduleVersion, LocalMenuMode.ClientModule, moduleMode) == ExistingInstanceAction.Activate,
+            "The same client-module version can reactivate its window.");
+        Check(!ExistingInstancePolicy.TryParseWindowTitle("Zyon 3.2.0 — FiveM b3258 / cliente local", out _, out _),
+            "The legacy two-mode parser must not mistake the module for the external backend.");
+        Check(ExistingInstancePolicy.TryParseModeWindowTitle(AppIdentity.ClientModuleTitle, out moduleVersion, out moduleMode) &&
+            moduleVersion == AppIdentity.Version && moduleMode == LocalMenuMode.ClientModule,
+            "AppIdentity and the client-module startup parser must agree.");
         Check(ExistingInstancePolicy.TryParseWindowTitle("Zyon 3.1.2 — FiveM b3258 / standalone", out var titleVersion, out var titleMode) &&
             titleVersion == current && titleMode == false, "The running title must normalize its three components to the four-component assembly version.");
         Check(ExistingInstancePolicy.Decide(current, titleVersion, false, titleMode) == ExistingInstanceAction.Activate,

@@ -50,7 +50,7 @@ internal sealed class StandaloneInstance : IDisposable
     }
 
     [SupportedOSPlatform("windows")]
-    public static ExistingInstanceAction HandleExistingInstance(bool requestAdministration,
+    public static ExistingInstanceAction HandleExistingInstance(LocalMenuMode requestedMode,
         out string description)
     {
         description = "Outra instância do menu ainda está inicializando ou não pôde ser identificada.";
@@ -67,9 +67,9 @@ internal sealed class StandaloneInstance : IDisposable
             GetWindowThreadProcessId(existing, out var owner);
             // Cross-published apphosts can retain the .NET runtime's PE FileVersion.
             // The window title comes from the running assembly's AppIdentity instead.
-            ExistingInstancePolicy.TryParseWindowTitle(title, out var existingVersion, out var administration);
+            ExistingInstancePolicy.TryParseModeWindowTitle(title, out var existingVersion, out var mode);
             var action = ExistingInstancePolicy.Decide(AppIdentity.Version, existingVersion,
-                requestAdministration, administration);
+                requestedMode, mode);
             description = existingVersion is null
                 ? "Existe uma cópia com identificação antiga ou sem versão verificável aberta."
                 : $"O menu aberto é da versão {existingVersion.Major}.{existingVersion.Minor}.{existingVersion.Build}. " +
@@ -93,7 +93,7 @@ internal sealed class StandaloneInstance : IDisposable
         {
             var title = ReadWindowTitle(window);
             bool matches = title == WindowTitle || title == AdminWindowTitle ||
-                ExistingInstancePolicy.TryParseWindowTitle(title, out _, out _);
+                ExistingInstancePolicy.TryParseModeWindowTitle(title, out _, out _);
             if (!matches) return true;
             if (fallback == 0) fallback = window;
             if (IsWindowVisible(window))

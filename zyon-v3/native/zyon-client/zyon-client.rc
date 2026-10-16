@@ -1,0 +1,2 @@
+// Custom resource type equals the game build; this is not RT_RCDATA.
+FX_ASI_BUILD 3258 BEGIN "\0" END

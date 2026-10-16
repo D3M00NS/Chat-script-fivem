@@ -14,7 +14,7 @@ internal sealed record OverlayFrame(Rectangle Bounds, bool Foreground, MenuSetti
     public static OverlayFrame Empty { get; } = new(Rectangle.Empty, false, new(), [], 0);
 }
 
-internal sealed class LocalGameSession : IDisposable
+internal sealed class LocalGameSession : ILocalGameSession
 {
     private const uint WorldOffset = 0x25B14B0, ReplayOffset = 0x1FBD4F0, ViewOffset = 0x201DBA0;
     private const uint CameraOffset = 0x201E7D0;
@@ -24,6 +24,9 @@ internal sealed class LocalGameSession : IDisposable
     private readonly Task _worker;
     private readonly EspOverlayHost _overlay;
     private readonly List<MenuEvent> _events = [];
+    private readonly LocalActionFence _actionFence = new();
+    private LocalHealthActionTelemetry _lastHealthAction = LocalHealthActionTelemetry.Empty;
+    private long _sessionEpoch;
     private readonly Dictionary<string, FeatureStatus> _featureStates = new(StringComparer.OrdinalIgnoreCase);
     private LocalPedTelemetry _localTelemetry = new();
     private ActorScanTelemetry _actorTelemetry = new();
@@ -31,7 +34,7 @@ internal sealed class LocalGameSession : IDisposable
     private WeaponTelemetry _weaponTelemetry = new();
     private SignatureTelemetry _signatureTelemetry = new();
     private GodModeTelemetry _godTelemetry = new();
-    private long _tickCount, _aimWriteCount, _weaponWriteCount, _godWriteCount;
+    private long _tickCount, _aimWriteCount, _weaponWriteCount, _godWriteCount, _healthWriteCount;
     private DateTimeOffset? _lastTickUtc, _lastWindowUtc;
     private Rectangle _lastWindowBounds;
     private bool _lastWindowForeground;
@@ -69,8 +72,14 @@ internal sealed class LocalGameSession : IDisposable
     public bool DetectionEnabled
     {
         get => Volatile.Read(ref _enabled) != 0;
-        set => Interlocked.Exchange(ref _enabled, value ? 1 : 0);
+        set
+        {
+            Interlocked.Exchange(ref _enabled, value ? 1 : 0);
+            if (!value) { _actionFence.Invalidate(); Interlocked.Increment(ref _sessionEpoch); }
+        }
     }
+
+    public long PlayerEpoch => Volatile.Read(ref _sessionEpoch);
 
     public Task<ServerStatus> GetStatusAsync(CancellationToken cancellationToken = default)
     {
@@ -80,6 +89,7 @@ internal sealed class LocalGameSession : IDisposable
             lock (_gate)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                PublishFeatureStates();
                 return Clone(_status);
             }
         }, cancellationToken);
@@ -120,8 +130,9 @@ internal sealed class LocalGameSession : IDisposable
                 {
                     TickCount = _tickCount, LastTickUtc = _lastTickUtc,
                     Local = _localTelemetry, Actors = _actorTelemetry, Camera = _cameraTelemetry,
+                    LastHealthAction = Volatile.Read(ref _lastHealthAction),
                     Weapons = _weaponTelemetry, Signatures = _signatureTelemetry, GodMode = _godTelemetry,
-                    Writes = new { AimVectors = _aimWriteCount, WeaponFields = _weaponWriteCount, GodFlags = _godWriteCount },
+                    Writes = new { AimVectors = _aimWriteCount, WeaponFields = _weaponWriteCount, GodFlags = _godWriteCount, HealthValues = _healthWriteCount },
                     Restoration = new
                     {
                         GodProblem = _godRestoreProblem, GodPed = Hex(_godPed), OriginalGodBit = _originalGodBit,
@@ -155,6 +166,7 @@ internal sealed class LocalGameSession : IDisposable
     {
         cancellationToken.ThrowIfCancellationRequested();
         settings.Validate();
+        long settingsGeneration = _actionFence.CaptureSettings();
         // Copy before scheduling: later edits in the menu must not change this request.
         var snapshot = Clone(settings);
         return Task.Run(() =>
@@ -163,6 +175,7 @@ internal sealed class LocalGameSession : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 ObjectDisposedException.ThrowIf(_disposed, this);
+                _actionFence.ValidateSettings(settingsGeneration);
                 if (!DetectionEnabled || !_status.Ready || _memory is null || !CurrentPedMatches(_ped))
                     throw new InvalidOperationException("Não há personagem local validado para aplicar opções.");
                 if (snapshot.Player.Noclip || snapshot.Player.Invisible || snapshot.Player.MuteVoice ||
@@ -187,6 +200,120 @@ internal sealed class LocalGameSession : IDisposable
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromException(new NotSupportedException(
             "Ressurreição e estado médico não foram implementados neste backend. Alterar a vida não confirma reviver."));
+    }
+
+    public Task ReviveAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) =>
+        ReviveAsync(cancellationToken);
+
+    public Task SuicideAsync(CancellationToken cancellationToken = default) => SuicideAsync(PlayerEpoch, cancellationToken);
+
+    public Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
+        if (expectedPlayerEpoch != PlayerEpoch)
+            throw new InvalidOperationException("O personagem mudou após a confirmação; confirme novamente a ação para o personagem atual.");
+        long actionId = _actionFence.BeginAction();
+        var owner = Volatile.Read(ref _memory);
+        ulong ped = Volatile.Read(ref _ped);
+        var requested = new LocalHealthActionTelemetry(actionId, "waiting", "Ação de saúde solicitada; aguardando validação do alvo.",
+            DateTimeOffset.UtcNow, null, Hex(ped), expectedPlayerEpoch, null, null, false, false);
+        Volatile.Write(ref _lastHealthAction, requested);
+        return RunSuicideAsync(requested, owner, ped, cancellationToken);
+    }
+
+    private async Task RunSuicideAsync(LocalHealthActionTelemetry requested, GameMemory? owner, ulong ped, CancellationToken cancellationToken)
+    {
+        Task? operation = null;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        try
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token, _lifetime.Token);
+            CancellationToken token = linked.Token;
+            // The delegate always runs its finally block, even when cancellation happened while it was queued.
+            operation = Task.Run(() =>
+            {
+                lock (_gate)
+                {
+                    var trace = new HealthActionTrace();
+                    try
+                    {
+                        token.ThrowIfCancellationRequested();
+                        ObjectDisposedException.ThrowIf(_disposed, this);
+                        if (owner is null || ped == 0 || !IsHealthActionTarget(requested, owner, ped))
+                            throw new InvalidOperationException("Não há personagem local da solicitação ainda validado para esta ação.");
+                        ExternalHealthAction.Execute(new HealthTarget(this, requested, owner, ped), trace, token);
+                        Volatile.Write(ref _lastHealthAction, requested with
+                        {
+                            State = "observed", FinishedUtc = DateTimeOffset.UtcNow, HealthBefore = trace.Before,
+                            HealthReadback = trace.Readback, GodRestoreConfirmed = trace.GodRestoreConfirmed,
+                            WriteAttempted = trace.WriteAttempted,
+                            Message = "Saúde zero observada após uma única escrita externa; morte médica ou estado do servidor não foram confirmados."
+                        });
+                        AddEvent("health-action", "Saúde zero lida no personagem da solicitação; a ação não será repetida automaticamente.");
+                    }
+                    catch (Exception error) when (error is IOException or InvalidOperationException or OperationCanceledException)
+                    {
+                        string reason = error is OperationCanceledException
+                            ? deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested
+                                ? "O prazo da ação expirou; nenhuma tentativa enfileirada será executada depois do cancelamento."
+                                : "A ação foi cancelada; não haverá repetição automática."
+                            : error.Message;
+                        Volatile.Write(ref _lastHealthAction, requested with
+                        {
+                            State = "blocked", Message = reason, FinishedUtc = DateTimeOffset.UtcNow,
+                            HealthBefore = trace.Before, HealthReadback = trace.Readback,
+                            GodRestoreConfirmed = trace.GodRestoreConfirmed, WriteAttempted = trace.WriteAttempted
+                        });
+                        AddEvent("health-action", reason);
+                        throw;
+                    }
+                    finally
+                    {
+                        if (_hasSnapshot) CompleteConfiguration();
+                        _actionFence.EndAction();
+                        PublishFeatureStates();
+                    }
+                }
+            });
+            // Observe a late failure even if the caller's deadline has already ended its wait.
+            _ = operation.ContinueWith(completed => { _ = completed.Exception; }, CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            try { await operation.WaitAsync(token); }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            { throw new TimeoutException("A ação excedeu dois segundos e foi cancelada; não haverá repetição automática."); }
+        }
+        finally { if (operation is null) _actionFence.EndAction(); }
+    }
+
+    private bool IsHealthActionTarget(LocalHealthActionTelemetry requested, GameMemory owner, ulong ped)
+    {
+        bool ContextMatches() => !_disposed && DetectionEnabled && _actionFence.IsCurrentAction(requested.Id) &&
+            requested.SessionEpoch == Volatile.Read(ref _sessionEpoch) && ReferenceEquals(owner, _memory) && _ped == ped;
+        // Recheck the cheap guards after Win32 reads so that disconnect/replacement during validation cannot pass.
+        return ContextMatches() && owner.IsAlive && CurrentPedMatches(ped) && ContextMatches();
+    }
+
+    private sealed class HealthTarget(LocalGameSession session, LocalHealthActionTelemetry requested, GameMemory owner, ulong ped)
+        : IExternalHealthTarget
+    {
+        public bool IsCurrent => session.IsHealthActionTarget(requested, owner, ped);
+        public float ReadHealth() => owner.Read<float>(ped + 0x280);
+        public void WriteHealth(float value) { owner.Write(ped + 0x280, value); session._healthWriteCount++; }
+        public bool DisableOwnedGodMode()
+        {
+            var snapshot = Clone(session._settings);
+            snapshot.Player.GodMode = false;
+            session._settings = snapshot;
+            session._hasSnapshot = true;
+            session._revision++;
+            session._status.DesiredRevision = session._revision;
+            bool restored = session.RestoreGod();
+            session.SetFeature("player.godMode", restored ? "ready" : "blocked", restored
+                ? "GodMode do menu desativado e snapshot próprio restaurado para a ação de saúde."
+                : "A restauração do GodMode próprio está pendente; a ação de saúde foi bloqueada.");
+            return restored;
+        }
     }
 
     public Task DisconnectAsync(CancellationToken cancellationToken = default)
@@ -891,6 +1018,7 @@ internal sealed class LocalGameSession : IDisposable
     {
         if (_godRestoreProblem is not null) SetFeature("player.godMode", "blocked", _godRestoreProblem);
         foreach (var problem in _weaponRestoreProblems.Values) SetFeature(problem.Feature, "blocked", problem.Reason);
+        RefreshSuicideFeatureState();
         _status.FeatureStates = _featureStates.Values.ToList();
     }
 
@@ -923,13 +1051,28 @@ internal sealed class LocalGameSession : IDisposable
         SetFeature("player.noclip", "unsupported", "Movimento e colisão de noclip não possuem implementação externa validada.");
         SetFeature("player.revive", "unsupported", "Ressurreição e estado médico não foram implementados; editar vida não confirma reviver.");
         SetFeature("silent", "unsupported", "Não há implementação validada de Silent Aim; mover a câmera não equivale a essa função.");
-        SetFeature("player.suicide", "unsupported", "Não há fluxo de morte validado para este cliente externo.");
         SetFeature("player.invisible", "unsupported", "Não há campo ou operação de invisibilidade validado neste cliente externo.");
         SetFeature("player.muteVoice", "unsupported", "Não há operação de voz validada neste cliente externo.");
         SetFeature("esp.admins", "unsupported", "Não há fonte externa validada para o papel administrativo dos jogadores.");
         SetFeature("esp.names", "unsupported", "A associação de nomes/IDs aos personagens não foi validada.");
         SetFeature("esp.visibility", "unsupported", "Não há teste de linha de visão validado neste perfil.");
         SetFeature("aim.visibility", "unsupported", "Não há teste de linha de visão validado neste perfil.");
+    }
+
+    private void RefreshSuicideFeatureState()
+    {
+        var action = Volatile.Read(ref _lastHealthAction);
+        if (action.Id != 0 && action.SessionEpoch == Volatile.Read(ref _sessionEpoch))
+        {
+            _featureStates["player.suicide"] = new FeatureStatus
+            {
+                Name = "player.suicide", State = action.State, Message = action.Message,
+                ObservedUtc = action.State == "observed" ? action.FinishedUtc : null
+            };
+        }
+        else SetFeature("player.suicide", _status.Ready ? "ready" : "waiting", _status.Ready
+            ? "Uma solicitação pode zerar a saúde local com leitura de retorno; o estado médico do servidor pode sobrescrever o resultado."
+            : "Aguardando processo e personagem local validados.");
     }
 
     private void CompleteConfiguration()
@@ -947,7 +1090,7 @@ internal sealed class LocalGameSession : IDisposable
 
     private string[] Capabilities()
     {
-        var output = new List<string> { "aim", "aim.playersOnly", "esp", "esp.boxes", "esp.skeletons", "esp.distance", "esp.playersOnly", "player.godMode" };
+        var output = new List<string> { "aim", "aim.playersOnly", "esp", "esp.boxes", "esp.skeletons", "esp.distance", "esp.playersOnly", "player.godMode", "player.suicide" };
         if (_recoilOffset is not null) output.Add("weapons.noRecoil");
         if (_spreadOffset is not null) output.Add("weapons.noSpread");
         return output.ToArray();
@@ -955,6 +1098,8 @@ internal sealed class LocalGameSession : IDisposable
 
     private void ReleasePed()
     {
+        _actionFence.Invalidate();
+        Interlocked.Increment(ref _sessionEpoch);
         RestoreGod(); RestoreWeapons(); _ped = 0; _hasSnapshot = false;
         _settings = NewDefaults(); _applied = 0; _lastAimTimestamp = 0;
         Volatile.Write(ref _frame, OverlayFrame.Empty);

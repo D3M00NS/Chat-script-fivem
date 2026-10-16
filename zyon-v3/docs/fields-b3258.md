@@ -1,5 +1,7 @@
 # Field evidence for the external b3258 client
 
+This document describes the memory backend selected by `--external`. The separate 3.2.0 client module executes a fixed set of natives through the official client scheduler; see [client module](client-module-3.2.0.md).
+
 Target requested in the conversation: Windows 10 x64, process `FiveM_b3258_GTAProcess.exe`. All evidence below is static source or binary inspection. None is a gameplay test. A process name selects the candidate profile; it does not prove that every address is valid. Reads, signatures, pointer chains and numeric values must pass validation before a feature runs.
 
 No code from the third-party ESP implementations was copied. Their documented field locations are cited as factual compatibility references. They have no identified license for their own implementation; this document is not permission to redistribute that implementation. The original uploaded executables are not part of this project.
@@ -21,8 +23,8 @@ The uploaded Midgard binary was statically inspected by a separate task. Its rep
 | Module `+0x201E7D0`, read pointer | Camera global | Public source, line 48; static Midgard report; camera subfields require separate evidence |
 | Ped `+0x90`, read 12 bytes | Position vector | Public header and static Midgard report |
 | Ped `+0x60`, read 64 bytes | Ped transformation matrix | Public source, lines 90–92; static Midgard report |
-| Ped `+0x280`, read float | Health | Public source, line 47; static Midgard report. Do not substitute `0x240`. |
-| Ped `+0x284` | Candidate maximum health only | No confirmed read/access evidence established here. Do not use it as a verified maximum-health field. |
+| Ped `+0x280`, read/write float | Health | Public source, line 47; CFX `Entity.HealthFloat` getter/setter at `MemoryAddress+640`; static Midgard report. Do not substitute `0x240`. |
+| Ped `+0x284`, read/write float | Maximum health | CFX `Entity.MaxHealthFloat` getter/setter at `MemoryAddress+644`. Numeric range and target identity still need runtime validation. |
 | Ped `+0x10A8`, read pointer | Player info candidate | Public b3258 source, line 42. Validate before using a nonzero pointer as a player filter. |
 | Ped `+0x10B8`, read pointer | Weapon manager candidate | Public b3258 source, line 45. Its following links need validation. |
 
@@ -30,6 +32,7 @@ The third-party loop reads 200 slots without establishing the interface's capaci
 
 Sources, pinned to the inspected revision:
 
+- [CFX health and maximum-health float accessors](https://github.com/citizenfx/fivem/blob/1bc76290982a77829f95b4267be7a493412cdc17/code/client/clrcore/External/Entity.cs#L82)
 - [b3258 setup and entity reads](https://github.com/vizu1234/fivem-external-esp-base/blob/b1134563b9912d25e2dc53fcaf89c59980db4390/FiveM%20External/src/game/game.cpp#L25)
 - [Profile declarations, including position](https://github.com/vizu1234/fivem-external-esp-base/blob/b1134563b9912d25e2dc53fcaf89c59980db4390/FiveM%20External/src/game/game.h#L10)
 
@@ -75,7 +78,7 @@ Primary CFX code establishes these facts about weapon-info metadata:
 | Feature | Signature bytes, `??` wildcard | Extracted displacement |
 | --- | --- | --- |
 | Recoil shake amplitude | `48 8B 47 40 F3 0F 10 B0 ?? ?? ?? ??` | Little-endian signed `int32` at match `+8`; field belongs to the weapon-info object. |
-| Accuracy spread | `F3 0F 10 43 ?? F3 0F 59 05 ?? ?? ?? ?? F3 0F 2C C0` | Unsigned byte at match `+4`; field belongs to weapon-info. |
+| Accuracy spread | `F3 0F 10 43 ?? F3 0F 59 05 ?? ?? ?? ?? F3 0F 2C C0` | Sign-extended `disp8` byte at match `+4`; negative values are rejected. Field belongs to weapon-info. |
 
 The setters write 32-bit floating point values at those resolved fields. In this source revision, the recoil getter exposes the bits as an integer while its setter accepts a float; preserve exact original bytes for restoration. Recoil-shake amplitude represents weapon camera shake. Setting it to zero does not by itself establish removal of every aiming or ballistic recoil mechanic.
 

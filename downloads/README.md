@@ -1,3 +1,17 @@
+# Zyon 3.2.0 — módulo local para teste no Windows
+
+[Pacote completo com runtime](ZyonMenu-v3.2.0-completo.zip) · [Pacote compacto](ZyonMenu-v3.2.0-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.2.0-packages.json)
+
+Com o FiveM fechado, extraia o ZIP, abra `ZyonMenu.exe` e use **Conexão → Preparar módulo local**. Selecione `FiveM.app`; depois abra o FiveM novamente. O programa instala somente no cliente e mantém backup de uma versão anterior.
+
+O módulo depende de o servidor já permitir plugins/ScriptHook e pure<2. Implementa GodMode, noclip/voar, invisibilidade, Freeze Ammo, suicídio e revive nativo para testes. Aim/ESP/recoil/spread continuam pelo leitor externo. **Silent Aim, voz recebida, ADMs/nomes e revive médico ESX/QBCore continuam pendentes.**
+
+Compilação e testes automatizados são distintos de validação no jogo. Consulte [instruções e limites](../zyon-v3/README.md) e [validação](../zyon-v3/docs/VALIDACAO.md). Para o modo externo anterior: `ZyonMenu.exe --external`.
+
+## Histórico
+
+Os pacotes abaixo pertencem a versões anteriores.
+
 # Zyon 3.1.2 — executável externo
 
 [Pacote completo com runtime](ZyonMenu-v3.1.2-completo.zip) · [Pacote compacto](ZyonMenu-v3.1.2-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.1.2-packages.json)

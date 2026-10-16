@@ -16,6 +16,7 @@ export TMPDIR="${TMPDIR:-$zyon_project_root/.build/tmp}"
 export DOTNET_NOLOGO=1 DOTNET_CLI_TELEMETRY_OPTOUT=1
 "$zyon_dotnet_command" run --project tests/ZyonMenu.Standalone.Tests/ZyonMenu.Standalone.Tests.csproj -c Release
 "$zyon_dotnet_command" run --project tests/ZyonMenu.Core.Tests/ZyonMenu.Core.Tests.csproj -c Release
+bash scripts/test-native.sh
 "$zyon_lua_command" tests/admin_server.lua
 "$zyon_lua_command" tests/admin_client.lua
 "$zyon_lua_command" tests/admin_medical.lua

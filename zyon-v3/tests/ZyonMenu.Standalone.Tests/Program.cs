@@ -4,6 +4,8 @@ using ZyonMenu.Core;
 using ZyonMenu.Standalone.Tests;
 
 if (ExistingInstanceChecks.TryHandleChild(args, out var childExitCode)) return childExitCode;
+if (args.Length == 3 && args[0] == "--check-embedded-client")
+    return EmbeddedClientModuleChecks.Verify(args[1], args[2]);
 
 var assertions = 0;
 var suites = new List<(string Name, Action Body)>
@@ -18,7 +20,10 @@ var suites = new List<(string Name, Action Body)>
     ("overlay freshness and partial actor geometry", () => assertions += OverlayChecks.Run()),
     ("bone transform ignores unused padding without weakening projection", () => assertions += AffinePaddingChecks.Run()),
     ("startup version policy and process mutex exclusion", () => assertions += ExistingInstanceChecks.Run()),
-    ("external observation readback and diagnostic snapshots", () => assertions += ExternalObservationChecks.Run())
+    ("external observation readback and diagnostic snapshots", () => assertions += ExternalObservationChecks.Run()),
+    ("external one-shot health actions and stale work", () => assertions += ExternalHealthActionChecks.Run()),
+    ("client-module protocol framing and named pipe transport", () => assertions += ClientModuleProtocolChecks.Run()),
+    ("client-module provider settings, actions and lifecycle", () => assertions += ClientModuleSessionChecks.Run())
 };
 
 var failures = 0;

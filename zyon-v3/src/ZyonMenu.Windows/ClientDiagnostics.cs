@@ -16,7 +16,7 @@ internal static class ClientDiagnostics
     {
         "FiveM_b3258_GTAProcess.exe", "rage-scripting-five.dll", "scripting-gta.dll", "gta-game-five.dll",
         "gta-net-five.dll", "citizen-playernames-five.dll", "citizen-resources-gta.dll",
-        "rage-nutsnbolts-five.dll", "citizen-game-main.dll"
+        "rage-nutsnbolts-five.dll", "citizen-game-main.dll", "scripthookv.dll", "ZyonClient.asi"
     };
 
     public static object Capture(GameMemory? memory)

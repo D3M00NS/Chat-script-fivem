@@ -1,7 +1,7 @@
 # Chat-script-fivem
 
-A atualização [Zyon 3.1.2](zyon-v3/README.md) usa somente o executável externo para FiveM b3258, sem recurso no servidor.
+[Zyon 3.2.0 — baixar pacote completo](downloads/ZyonMenu-v3.2.0-completo.zip) · [Fontes e instruções](zyon-v3/README.md) · [Validação](zyon-v3/docs/VALIDACAO.md)
 
-[Baixar pacote completo](downloads/ZyonMenu-v3.1.2-completo.zip) · [Outros pacotes e hashes](downloads/README.md) · [Validação](zyon-v3/docs/VALIDACAO.md)
+Versão de teste Windows x64/FiveM b3258 com módulo instalado somente no cliente pelo próprio executável. Não exige recurso no servidor; o servidor precisa já permitir plugins/ScriptHook.
 
-Corrige a reutilização silenciosa de uma versão antiga e o descarte de ossos por padding inválido. Inclui diagnóstico por função. Silent Aim, reviver e noclip externos continuam sem implementação; os efeitos reais de Aim/ESP/armas ainda precisam ser conferidos no FiveM do usuário.
+Implementa o módulo nativo para GodMode, noclip/voar, invisibilidade, munição, suicídio e revive nativo. Silent Aim, identificação de ADMs e integração médica ESX/QBCore permanecem pendentes. Comportamento real no FiveM ainda precisa de validação pelo usuário.
