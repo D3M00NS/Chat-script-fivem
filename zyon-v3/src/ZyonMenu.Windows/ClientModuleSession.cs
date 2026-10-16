@@ -19,10 +19,11 @@ namespace ZyonMenu.Windows;
 internal sealed partial class ClientModuleSession : ILocalGameSession
 {
     private static readonly string[] NativeFeatures =
-        ["player.godMode", "player.noclip", "player.invisible", "weapons.freezeAmmo", "player.revive", "player.suicide"];
+        ["player.godMode", "player.noclip", "player.invisible", "weapons.freezeAmmo", "player.revive", "player.suicide", "vehicle.lock", "vehicle.unlock", "silent"];
     private static readonly ClientModuleCapabilities[] NativeCapabilities =
         [ClientModuleCapabilities.God, ClientModuleCapabilities.Noclip, ClientModuleCapabilities.Invisible,
-            ClientModuleCapabilities.FreezeAmmo, ClientModuleCapabilities.ReviveNative, ClientModuleCapabilities.Suicide];
+            ClientModuleCapabilities.FreezeAmmo, ClientModuleCapabilities.ReviveNative, ClientModuleCapabilities.Suicide,
+            ClientModuleCapabilities.LockVehicle, ClientModuleCapabilities.UnlockVehicle, ClientModuleCapabilities.DirectedFireExperimental];
     private readonly ILocalGameSession _external;
     private readonly object _gate = new();
     private readonly SemaphoreSlim _io = new(1, 1), _mutations = new(1, 1);
@@ -102,17 +103,24 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             {
                 bool supported = ready && _native!.Capabilities.HasFlag(NativeCapabilities[index]);
                 if (supported) capabilities.Add(NativeFeatures[index]);
-                bool action = index >= 4;
+                bool action = index is >= 4 and <= 7;
+                bool directedFireFailed = index == 8 && supported && _native!.Error == 13;
                 bool configured = !action && IsConfigured((ClientModuleSettingsFlags)(1u << index), _settings);
-                bool observed = supported && !action && _nativeParticipated && _hasSettings &&
+                bool observed = supported && !action && !directedFireFailed && _nativeParticipated && _hasSettings &&
                     _native!.AppliedRevision == (ulong)_revision && _native.StateFlags.HasFlag(ClientModuleStateFlags.SettingsActive);
                 result.FeatureStates.Add(new FeatureStatus
                 {
                     Name = NativeFeatures[index],
                     State = !supported ? ready ? "unsupported" : "waiting"
-                        : observed && configured ? "observed" : configured ? "waiting" : "ready",
+                        : directedFireFailed ? "failed" : observed && configured ? "observed" : configured ? "waiting" : "ready",
                     Message = !supported ? ready ? "A API desse cliente não disponibilizou todas as operações exigidas por esta função." : _moduleMessage
-                        : action ? "Disponível pelo módulo local; somente a observação nativa confirma a ação. Reviver não limpa estado médico ESX/QBCore."
+                        : directedFireFailed ? _native!.Message
+                        : action ? index >= 6
+                            ? "Disponível pelo módulo local; a observação da porta nativa não comprova chaves ou permissões do framework do servidor."
+                            : "Disponível pelo módulo local; somente a observação nativa confirma a ação. Reviver não limpa estado médico ESX/QBCore."
+                        : index == 8 ? observed
+                            ? "Quadro experimental processado; veja consumo no diagnóstico. Acerto não foi validado."
+                            : "Disparo direcionado experimental disponível; nenhuma configuração correspondente foi observada. Munição não confirma acerto ou dano."
                         : observed ? "Configuração processada em quadro nativo recente; a observação não comprova políticas de inventário ou hospital do servidor."
                         : "Módulo local pronto; nenhuma configuração nativa correspondente foi observada.",
                     ObservedUtc = observed ? _nativeObservedUtc : null
@@ -159,7 +167,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     {
         ArgumentNullException.ThrowIfNull(settings);
         var snapshot = ExternalStateSerialization.Clone(settings);
-        snapshot.Validate();
+        snapshot.Validate(allowExperimentalSilent: true);
         long fence = Interlocked.Read(ref _settingsEpoch);
         if (Volatile.Read(ref _actionPending) != 0) throw new InvalidOperationException("Aguarde a observação da ação antes de enviar outra configuração.");
         using var deadline = Deadline(cancellationToken);
@@ -211,6 +219,28 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     public Task SuicideAsync(CancellationToken cancellationToken = default) => SuicideAsync(PlayerEpoch, cancellationToken);
     public Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) =>
         ExecuteActionAsync(ClientModuleAction.Suicide, expectedPlayerEpoch, cancellationToken);
+    public Task SetVehicleLockAsync(bool locked, CancellationToken cancellationToken = default) =>
+        SetVehicleLockAsync(locked, PlayerEpoch, cancellationToken);
+    public Task SetVehicleLockAsync(bool locked, long expectedPlayerEpoch, CancellationToken cancellationToken = default) =>
+        ExecuteActionAsync(locked ? ClientModuleAction.LockVehicle : ClientModuleAction.UnlockVehicle, expectedPlayerEpoch, cancellationToken);
+
+    private static ClientModuleCapabilities CapabilityForAction(ClientModuleAction action) => action switch
+    {
+        ClientModuleAction.ReviveNative => ClientModuleCapabilities.ReviveNative,
+        ClientModuleAction.Suicide => ClientModuleCapabilities.Suicide,
+        ClientModuleAction.LockVehicle => ClientModuleCapabilities.LockVehicle,
+        ClientModuleAction.UnlockVehicle => ClientModuleCapabilities.UnlockVehicle,
+        _ => throw new ArgumentOutOfRangeException(nameof(action), "Operação nativa desconhecida.")
+    };
+
+    private static string ActionObservation(ClientModuleAction action) => action switch
+    {
+        ClientModuleAction.ReviveNative => "Ressurreição nativa observada; estado médico ESX/QBCore não foi limpo.",
+        ClientModuleAction.Suicide => "Morte observada pelo módulo em quadro nativo recente.",
+        ClientModuleAction.LockVehicle => "Porta nativa do veículo observada como trancada; isso não comprova chaves ou permissões do framework do servidor.",
+        ClientModuleAction.UnlockVehicle => "Porta nativa do veículo observada como destrancada; isso não comprova chaves ou permissões do framework do servidor.",
+        _ => throw new ArgumentOutOfRangeException(nameof(action), "Operação nativa desconhecida.")
+    };
 
     private async Task ExecuteActionAsync(ClientModuleAction action, long expectedPlayerEpoch, CancellationToken cancellationToken)
     {
@@ -226,28 +256,12 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         try
         {
             await _mutations.WaitAsync(deadline.Token).ConfigureAwait(false); entered = true;
-            uint ped;
-            ulong requestedTick;
-            MenuSettings? suicideSettings = null;
-            long settingsRevision = 0;
-            lock (_gate)
-            {
-                RequireActionTargetLocked(expectedPlayerEpoch);
-                connection = _connection!;
-                var capability = action == ClientModuleAction.Suicide ? ClientModuleCapabilities.Suicide : ClientModuleCapabilities.ReviveNative;
-                if (!_native!.Capabilities.HasFlag(capability)) throw new NotSupportedException("O módulo não anunciou essa operação nativa.");
-                ped = _native.Ped; requestedTick = _native.NativeTick;
-                if (action == ClientModuleAction.Suicide)
-                {
-                    // Replace the owned snapshot before dispatch. Queued old GodMode
-                    // updates are fenced, and no new settings enter during the action.
-                    suicideSettings = ExternalStateSerialization.Clone(_settings);
-                    suicideSettings.Player.GodMode = false;
-                    suicideSettings.Player.Noclip = false;
-                    _settings = suicideSettings; _hasSettings = true; _nativeParticipated = true;
-                    settingsRevision = checked(++_revision);
-                }
-            }
+            var prepared = PrepareAction(action, expectedPlayerEpoch);
+            connection = prepared.Connection;
+            uint ped = prepared.Ped;
+            ulong requestedTick = prepared.NativeTick;
+            MenuSettings? suicideSettings = prepared.SuicideSettings;
+            long settingsRevision = prepared.SettingsRevision;
             if (suicideSettings is not null)
             {
                 await SendSettingsAsync(connection, suicideSettings, settingsRevision, deadline.Token, fence, action: true).ConfigureAwait(false);
@@ -283,11 +297,16 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                         if (native.ActionResult == ClientModuleActionResult.Observed)
                         {
                             bool alive = native.StateFlags.HasFlag(ClientModuleStateFlags.PedAlive);
-                            if (native.Ped != ped || native.NativeTick < requestedTick || alive != (action == ClientModuleAction.ReviveNative))
+                            bool healthResultMatches = action switch
+                            {
+                                ClientModuleAction.ReviveNative => alive,
+                                ClientModuleAction.Suicide => !alive,
+                                ClientModuleAction.LockVehicle or ClientModuleAction.UnlockVehicle => true,
+                                _ => false
+                            };
+                            if (native.Ped != ped || native.NativeTick < requestedTick || !healthResultMatches)
                                 throw new InvalidDataException("A observação da ação não corresponde ao personagem ou ao resultado solicitado.");
-                            AddEventLocked("observed", action == ClientModuleAction.Suicide
-                                ? "Morte observada pelo módulo em quadro nativo recente."
-                                : "Ressurreição nativa observada; estado médico ESX/QBCore não foi limpo.");
+                            AddEventLocked("observed", ActionObservation(action));
                             return;
                         }
                     }
@@ -312,12 +331,40 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         }
     }
 
+    private (Connection Connection, uint Ped, ulong NativeTick, MenuSettings? SuicideSettings, long SettingsRevision)
+        PrepareAction(ClientModuleAction action, long expectedPlayerEpoch)
+    {
+        // Complete target capture and capability rejection in a synchronous
+        // scope, before the action can complete its task or await pipe I/O.
+        lock (_gate)
+        {
+            RequireActionTargetLocked(expectedPlayerEpoch);
+            var capability = CapabilityForAction(action);
+            if (!_native!.Capabilities.HasFlag(capability)) throw new NotSupportedException("O módulo não anunciou essa operação nativa.");
+            MenuSettings? suicideSettings = null;
+            long settingsRevision = 0;
+            if (action == ClientModuleAction.Suicide)
+            {
+                // Replace the owned snapshot before dispatch. Queued old GodMode
+                // updates are fenced, and no new settings enter during the action.
+                suicideSettings = ExternalStateSerialization.Clone(_settings);
+                suicideSettings.Player.GodMode = false;
+                suicideSettings.Player.Noclip = false;
+                _settings = suicideSettings; _hasSettings = true; _nativeParticipated = true;
+                settingsRevision = checked(++_revision);
+            }
+            return (_connection!, _native.Ped, _native.NativeTick, suicideSettings, settingsRevision);
+        }
+    }
+
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
         Interlocked.Exchange(ref _enabled, 0);
         Interlocked.Increment(ref _settingsEpoch);
         Connection? connection;
-        lock (_gate) { connection = _connection; _actionAbort?.Cancel(); }
+        CancellationTokenSource? actionAbort;
+        lock (_gate) { connection = _connection; actionAbort = _actionAbort; }
+        TryCancel(actionAbort);
         try
         {
             using var deadline = Deadline(cancellationToken);
@@ -351,7 +398,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                     State = _native, ObservedUtc = _nativeObservedUtc, ReadyFresh = NativeReadyLocked(),
                     FrameAgeMilliseconds = _native is null ? (long?)null : Environment.TickCount64 - (long)_native.NativeTick,
                     Message = _moduleMessage, DesiredRevision = _revision,
-                    Meaning = "Only matching action nonce + native frame observation confirms a health action. Native revive does not reset server medical state." },
+                    Meaning = "Only matching action nonce + native frame observation confirms the requested action. Native revive does not reset server medical state; door observations do not prove framework keys or server permissions." },
                 External = parsed.RootElement.Clone(), Events = _events.Select(ExternalStateSerialization.Clone).ToArray()
             });
     }
@@ -447,7 +494,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             else if (fence != Interlocked.Read(ref _settingsEpoch)) throw new OperationCanceledException("A sessão da ação mudou.");
             lock (_gate) { EnsureConnectionLocked(connection); connection.HighestRevision = (ulong)revision; }
             await ExchangeLockedAsync(connection, ClientModuleKind.Settings,
-                ClientModuleProtocol.SettingsPayload(connection.Token, (ulong)revision, NativeFlags(snapshot), (uint)snapshot.Player.NoclipSpeed),
+                ClientModuleProtocol.SettingsPayload(connection.Token, (ulong)revision, NativeFlags(snapshot), (uint)snapshot.Player.NoclipSpeed, snapshot.Silent),
                 cancellationToken).ConfigureAwait(false);
         }
         finally { _io.Release(); }
@@ -549,6 +596,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     private void AbortConnection(Connection? expected, string message)
     {
         Connection? dispose;
+        CancellationTokenSource? actionAbort;
         lock (_gate)
         {
             if (expected is not null && !ReferenceEquals(expected, _connection)) return;
@@ -557,10 +605,19 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             if (_moduleMessage != message) AddEventLocked("module", message);
             _moduleMessage = message;
             if (dispose is not null) Interlocked.Increment(ref _settingsEpoch);
-            _actionAbort?.Cancel();
+            actionAbort = _actionAbort;
             RefreshIdentityLocked();
         }
+        TryCancel(actionAbort);
         dispose?.Dispose();
+    }
+
+    private static void TryCancel(CancellationTokenSource? source)
+    {
+        // Cancellation can complete pipe continuations that acquire _gate.
+        // Never wait for those callbacks while holding the session gate.
+        try { source?.Cancel(); }
+        catch (ObjectDisposedException) { /* The corresponding action already completed. */ }
     }
 
     private void AddEventLocked(string type, string message)
@@ -589,6 +646,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         var shadow = ExternalStateSerialization.Clone(settings);
         shadow.Player.GodMode = false; shadow.Player.Noclip = false; shadow.Player.Invisible = false;
         shadow.Weapons.FreezeAmmo = false;
+        shadow.Silent.Enabled = false; shadow.Silent.DrawFov = false;
         return shadow;
     }
 
@@ -599,7 +657,8 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         (settings.Player.GodMode ? ClientModuleSettingsFlags.God : 0) |
         (settings.Player.Noclip ? ClientModuleSettingsFlags.Noclip : 0) |
         (settings.Player.Invisible ? ClientModuleSettingsFlags.Invisible : 0) |
-        (settings.Weapons.FreezeAmmo ? ClientModuleSettingsFlags.FreezeAmmo : 0);
+        (settings.Weapons.FreezeAmmo ? ClientModuleSettingsFlags.FreezeAmmo : 0) |
+        (settings.Silent.Enabled ? ClientModuleSettingsFlags.DirectedFireExperimental : 0);
 
     private static bool IsConfigured(ClientModuleSettingsFlags flag, MenuSettings settings) => NativeFlags(settings).HasFlag(flag);
 
@@ -614,7 +673,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     private static async Task<NamedPipeClientStream> ConnectPipeAsync(int processId, CancellationToken cancellationToken)
     {
         if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("O módulo local precisa do Windows.");
-        var stream = new NamedPipeClientStream(".", "ZyonClientBridge-v1-" + processId,
+        var stream = new NamedPipeClientStream(".", "ZyonClientBridge-v2-" + processId,
             PipeDirection.InOut, PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly, TokenImpersonationLevel.Identification);
         try
         {

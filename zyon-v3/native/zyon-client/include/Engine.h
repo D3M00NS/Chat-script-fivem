@@ -2,6 +2,7 @@
 
 #include "NativeInvoker.h"
 #include "Protocol.h"
+#include "DirectedFire.h"
 #include <initializer_list>
 
 namespace zyon {
@@ -10,7 +11,7 @@ namespace zyon {
 // This class never accepts addresses or native hashes from IPC.
 class Engine {
 public:
-    explicit Engine(INativeInvoker& natives) : natives_(natives) {}
+    explicit Engine(INativeInvoker& natives) : natives_(natives), directedFire_(natives) {}
     void Step(const ControlSnapshot& snapshot, std::uint64_t nowMs);
     RuntimeStatus Status() const { return status_; }
 
@@ -21,15 +22,21 @@ private:
         bool original = false, owned = false;
     };
     INativeInvoker& natives_;
+    DirectedFire directedFire_;
+    std::uint64_t directedFailedRevision_ = 0;
+    char directedFailure_[160]{};
     RuntimeStatus status_{};
     Settings settings_{};
     std::uint64_t epoch_ = 0, minimumRevision_ = 0, failedRevision_ = 0;
     std::uint64_t lastActionNonce_ = 0, pendingStarted_ = 0;
     std::uint32_t pendingPed_ = 0, pendingAction_ = NoAction;
+    std::uint32_t pendingVehicle_ = 0, pendingVehicleModel_ = 0;
+    std::uint64_t pendingVehicleAttemptMs_ = 0;
     std::uint32_t ped_ = 0, model_ = 0, timer_ = 0, suppressedFlags_ = 0, unavailableFlags_ = 0;
     std::uint32_t ammoWeapon_ = 0;
     int ammoTotal_ = 0, ammoClip_ = 0;
     bool hasEpoch_ = false, revoked_ = false, timerSeen_ = false, hasSettings_ = false, ammoHasClip_ = false;
+    bool pendingVehicleOccupied_ = false, pendingVehicleWritten_ = false;
     Property god_{}, visible_{}, collision_{}, frozen_{};
 
     bool Call(std::uint64_t hash, std::initializer_list<std::uint64_t> args, NativeResult* result = nullptr);
@@ -39,6 +46,10 @@ private:
     bool Vector(std::uint64_t hash, std::initializer_list<std::uint64_t> args, Vec& value);
     bool ValidatePed(std::uint32_t ped, std::uint32_t* model = nullptr);
     bool SameLocalPed(std::uint32_t ped);
+    bool ValidateVehicle(std::uint32_t vehicle, std::uint32_t* model = nullptr);
+    bool CaptureVehicle();
+    bool SameVehicleTarget();
+    void AdvanceVehicleAction(std::uint64_t nowMs);
     bool RequiredNativesAvailable() const;
     std::uint32_t AvailableCapabilities() const;
     bool Dead(bool& dead);

@@ -9,14 +9,16 @@ public sealed class MenuSettings
     public PlayerSettings Player { get; set; } = new();
     public EspSettings Esp { get; set; } = new();
 
-    public void Validate()
+    public void Validate(bool allowExperimentalSilent = false)
     {
         if (Aim is null || Silent is null || Weapons is null || Player is null || Esp is null)
             throw new ArgumentException("As configurações precisam conter todas as seções.");
         Aim.Validate();
         Silent.Validate();
-        if (Silent.Enabled)
+        if (Silent.Enabled && !allowExperimentalSilent)
             throw new ArgumentException("Silent aim não está implementado nesta integração.");
+        if (Silent.Enabled && (!Silent.OnlyPlayers || Silent.DrawFov || Silent.Smooth != 1))
+            throw new ArgumentException("O disparo direcionado experimental exige somente jogadores, sem desenho de FOV e suavização 1.");
         if (Esp.MaxDistance is < 25 or > 1000)
             throw new ArgumentException("A distância do ESP deve ficar entre 25 e 1000 metros.");
         if (Player.NoclipSpeed is < 1 or > 50)

@@ -27,7 +27,10 @@ internal sealed class MainForm : Form
     private readonly Button _saveDiagnostic = Theme.Button("Salvar diagnóstico");
     private readonly Button _revive = Theme.Button("Reviver indisponível");
     private readonly Button _suicide = Theme.Button("Suicídio");
+    private readonly Button _lockVehicle = Theme.Button("Bloquear carro");
+    private readonly Button _unlockVehicle = Theme.Button("Desbloquear carro");
     private readonly Label _playerActionStatus = Theme.Label("Ações locais exigem uma sessão ativa. Suicídio pede confirmação.", true);
+    private readonly Label _vehicleActionStatus = Theme.Label("Entre no carro ou aproxime-se dele até 8 metros.", true);
     private readonly DataGridView _featureStates = new();
     private readonly ILocalGameSession _client;
     private bool UsesClientModule => _client is ClientModuleSession;
@@ -43,6 +46,7 @@ internal sealed class MainForm : Form
     private bool _disconnecting;
     private bool _reviving;
     private bool _suiciding;
+    private bool _vehicleActionPending;
     private bool _closing;
     private bool _dirty = true;
     private bool _synchronizing;
@@ -56,7 +60,9 @@ internal sealed class MainForm : Form
     {
         var settings = new MenuSettings();
         settings.Aim.OnlyVisible = false;
-        settings.Silent.OnlyVisible = false;
+        settings.Silent.OnlyVisible = true;
+        settings.Silent.OnlyPlayers = true;
+        settings.Silent.DrawFov = false;
         settings.Esp.OnlyVisible = false;
         settings.Esp.Names = false;
         return settings;
@@ -81,6 +87,7 @@ internal sealed class MainForm : Form
         BuildAimPage();
         BuildPlayerPage();
         BuildNoclipPage();
+        BuildVehiclePage();
         BuildEspPage();
         BuildWeaponsPage();
         BuildConnectionPage();
@@ -93,6 +100,8 @@ internal sealed class MainForm : Form
         _saveDiagnostic.Click += (_, _) => SaveDiagnostic();
         _revive.Click += async (_, _) => await ReviveAsync();
         _suicide.Click += async (_, _) => await SuicideAsync();
+        _lockVehicle.Click += async (_, _) => await SetVehicleLockAsync(true);
+        _unlockVehicle.Click += async (_, _) => await SetVehicleLockAsync(false);
         FormClosing += OnFormClosing;
         Shown += async (_, _) =>
         {
@@ -129,6 +138,7 @@ internal sealed class MainForm : Form
                      ("Aim", "◎", "Aim"),
                      ("Player", "♟", "Personagem"),
                      ("Noclip", "↟", "Noclip"),
+                     ("Vehicle", "▱", "Veículo"),
                      ("ESP", "◉", "ESP"),
                      ("Weapons", "⌁", "Armas"),
                      ("Connection", "⚙", "Conexão")
@@ -226,13 +236,34 @@ internal sealed class MainForm : Form
     {
         var page = NewPage("Aim");
         page.Controls.Add(AimCard("Aimbot Aim", _settings.Aim, "aim"));
-        var silentCard = Card("Silent Aim · indisponível", 408, 188);
-        AddNote(silentCard, "Silent Aim ainda não implementado neste perfil. Não há ativação disponível até existir suporte confirmado.", 62, 360);
-        page.Controls.Add(silentCard);
+        page.Controls.Add(SilentCard());
         page.Controls.Add(WeaponsCard(408));
         var note = Card("Configuração local", 408, 258);
-        AddNote(note, "Você pode preparar as opções antes de abrir o FiveM. Elas ficam pendentes até validar o processo b3258 e o personagem local. A barra inferior mostra a configuração recebida pelo backend. A situação de cada função indica o que foi confirmado em leitura; o comportamento no jogo precisa ser conferido. Peito (aprox.) usa um ponto estimado na parte superior do tronco. Linha de visão não está disponível neste perfil.", 61, 360);
+        AddNote(note, "Você pode preparar as opções antes de abrir o FiveM. Elas ficam pendentes até validar o processo b3258 e o personagem local. A barra inferior mostra a configuração recebida pelo backend. A situação de cada função indica o que foi confirmado em leitura; o comportamento no jogo precisa ser conferido. Peito (aprox.) no Aimbot usa um ponto estimado na parte superior do tronco. Linha de visão do Aimbot não está disponível neste perfil.", 61, 360);
         page.Controls.Add(note);
+    }
+
+    private RoundedCard SilentCard()
+    {
+        if (!UsesClientModule)
+        {
+            var unavailable = Card("Silent Aim · indisponível", 408, 188);
+            AddNote(unavailable, "Silent Aim experimental exige o módulo local conectado ao FiveM. Não está disponível no modo externo.", 62, 360);
+            return unavailable;
+        }
+
+        var card = Card("Silent Aim · experimental", 408, 650);
+        var settings = _settings.Silent;
+        AddToggle(card, "Ativar Silent Aim experimental", () => settings.Enabled, v => settings.Enabled = v, "silent", 60);
+        AddToggle(card, "Somente visível (linha de visão)", () => settings.OnlyVisible, v => settings.OnlyVisible = v, "silent", 100);
+        AddChoice(card, "Alvo", new[] { "Head", "Neck", "Chest" }, new[] { "Cabeça", "Pescoço", "Peito" },
+            settings.TargetBone, v => settings.TargetBone = v, "silent", 140);
+        AddChoice(card, "Tecla de ativação", new[] { "RMB", "LMB", "Alt", "Shift", "Ctrl" },
+            new[] { "Mouse [Mirar]", "Mouse [Atirar]", "Alt", "Shift", "Ctrl" }, settings.ActivationKey,
+            v => settings.ActivationKey = v, "silent", 180);
+        AddSlider(card, "FOV (pixels)", 10, 500, settings.Fov, v => settings.Fov = v, "silent", 220);
+        AddNote(card, "Somente jogadores. Sem suavização ou círculo FOV.\n\nTeste experimental com SET_PED_SHOOTS_AT_COORD, sem mover a câmera. Solte o botão de tiro após ativar. Depois, pressione LMB junto da tecla de ativação; há uma tentativa por pressionamento.\n\nExige personagem vivo, a pé e jogo em foco. Enquanto ativo, substitui a entrada normal de tiro: pode impedir tiros quando não encontra alvo no FOV.\n\nA chamada não garante redirecionar o tiro original nem acertar o alvo; pode não produzir efeito no jogo. Teste e envie o JSON de Salvar diagnóstico.", 278, 360);
+        return card;
     }
 
     private RoundedCard AimCard(string title, AimSettings settings, string capability)
@@ -315,6 +346,32 @@ internal sealed class MainForm : Form
         AddNote(note, UsesClientModule
             ? "W / A / S / D · mover conforme a câmera\nEspaço · subir\nCtrl · descer\nShift · acelerar enquanto pressionado\n\nInsert · ocultar o menu e voltar ao jogo. A sessão do módulo local precisa permanecer conectada."
             : "Movimento e velocidade do noclip não são enviados ao jogo por esta versão. O controle de velocidade permanece visível e desativado enquanto essa função não tem suporte real.", 62, 360);
+        page.Controls.Add(note);
+    }
+
+    private void BuildVehiclePage()
+    {
+        var page = NewPage("Vehicle");
+        var card = Card(UsesClientModule ? "Portas do veículo" : "Veículo · indisponível", 408, 302);
+        _lockVehicle.Location = new Point(20, 65);
+        _lockVehicle.Width = 220;
+        _unlockVehicle.Location = new Point(20, 117);
+        _unlockVehicle.Width = 220;
+        _vehicleActionStatus.AutoSize = false;
+        _vehicleActionStatus.Location = new Point(20, 178);
+        _vehicleActionStatus.Size = new Size(360, 106);
+        if (!UsesClientModule)
+            _vehicleActionStatus.Text = "Bloquear e desbloquear exigem o módulo local conectado ao FiveM.";
+        card.Controls.AddRange(new Control[] { _lockVehicle, _unlockVehicle, _vehicleActionStatus });
+        RegisterCapability("vehicle.lock", _lockVehicle);
+        RegisterCapability("vehicle.unlock", _unlockVehicle);
+        _tooltips.SetToolTip(_lockVehicle, "Bloqueia as portas do carro ocupado ou do carro mais próximo em até 8 metros, após confirmação.");
+        _tooltips.SetToolTip(_unlockVehicle, "Desbloqueia as portas do carro ocupado ou do carro mais próximo em até 8 metros, após confirmação.");
+        page.Controls.Add(card);
+        var note = Card("Como usar", 408, 302);
+        AddNote(note, UsesClientModule
+            ? "Entre no carro ou fique a até 8 metros dele. Se estiver a pé, a ação seleciona o veículo mais próximo.\n\nO módulo precisa estar conectado e ter controle do veículo. O resultado é confirmado pela leitura nativa das portas.\n\nScripts de chaves ou garagem podem mudar o estado novamente. A ação não concede chaves de ESX/QBCore e não verifica cargo de administrador."
+            : "Abra o menu em CLIENTE LOCAL e prepare o módulo na aba Conexão. As ações das portas não estão disponíveis no modo externo.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -453,8 +510,9 @@ internal sealed class MainForm : Form
         if (reported.Count == 0)
         {
             _featureStates.Rows.Add("Backend local", "Sem confirmação", "Aguardando um processo e um personagem compatíveis.");
-            _featureStates.Rows.Add("Silent Aim", "Não implementada", "Indisponível neste perfil.");
-            foreach (var feature in new[] { "Reviver", "Noclip / voar", "Freeze Ammo" })
+            _featureStates.Rows.Add("Silent Aim", UsesClientModule ? "Aguardando módulo local" : "Não implementada",
+                UsesClientModule ? "Experimental; aguarde suporte confirmado pelo módulo e teste no jogo." : "Indisponível neste perfil externo.");
+            foreach (var feature in new[] { "Reviver", "Noclip / voar", "Freeze Ammo", "Bloquear carro", "Desbloquear carro" })
                 _featureStates.Rows.Add(feature, UsesClientModule ? "Aguardando módulo local" : "Não implementada",
                     UsesClientModule ? "Prepare o módulo local e aguarde a conexão do FiveM." : "Indisponível neste perfil externo.");
             RestorePosition();
@@ -480,6 +538,8 @@ internal sealed class MainForm : Form
                 "weapons.noRecoil" => "No Recoil",
                 "weapons.noSpread" => "No Spread",
                 "weapons.freezeAmmo" => "Freeze Ammo",
+                "vehicle.lock" => "Bloquear carro",
+                "vehicle.unlock" => "Desbloquear carro",
                 _ => feature.Name
             };
             var state = feature.State switch
@@ -488,6 +548,7 @@ internal sealed class MainForm : Form
                 "waiting" => "Aguardando dados",
                 "observed" => "Leitura confirmada",
                 "blocked" => "Bloqueada",
+                "failed" => "Falha na execução",
                 "unsupported" => "Não implementada",
                 _ => "Sem confirmação"
             };
@@ -529,7 +590,7 @@ internal sealed class MainForm : Form
         };
         _toggleBindings.Add((toggle, getter));
         if (capability == "silent")
-            _tooltips.SetToolTip(toggle, "Redirecionamento de projéteis não implementado nesta integração.");
+            _tooltips.SetToolTip(toggle, "Experimental: substitui a entrada de tiro e tenta uma chamada nativa por pressionamento. Não garante tiro redirecionado ou acerto; valide no jogo.");
         if (capability == "weapons.noRecoil")
             _tooltips.SetToolTip(toggle, "Só será aplicado se o perfil b3258 confirmar os campos de recuo da arma.");
         if (capability == "weapons.freezeAmmo")
@@ -644,7 +705,7 @@ internal sealed class MainForm : Form
 
     private async Task SendSettingsAsync()
     {
-        if (_sending || _suiciding || _reviving || _disconnecting || !_dirty || !_healthy || !_client.DetectionEnabled ||
+        if (_sending || _suiciding || _reviving || _vehicleActionPending || _disconnecting || !_dirty || !_healthy || !_client.DetectionEnabled ||
             _lastStatus is not { Ready: true, PlayerOnline: true } || _session is null) return;
         var cancellation = _session.Token;
         var generation = _connectionGeneration;
@@ -751,8 +812,9 @@ internal sealed class MainForm : Form
         _settings.Aim.DrawFov = Keep(_settings.Aim.DrawFov, "aim");
         _settings.Aim.OnlyVisible = Keep(_settings.Aim.OnlyVisible, "aim.visibility");
         _settings.Aim.OnlyPlayers = Keep(_settings.Aim.OnlyPlayers, "aim.playersOnly");
-        _settings.Silent.Enabled = false;
+        _settings.Silent.Enabled = Keep(_settings.Silent.Enabled, "silent") && UsesClientModule;
         _settings.Silent.DrawFov = false;
+        _settings.Silent.OnlyPlayers = true;
         _settings.Weapons.NoRecoil = Keep(_settings.Weapons.NoRecoil, "weapons.noRecoil");
         _settings.Weapons.NoSpread = Keep(_settings.Weapons.NoSpread, "weapons.noSpread");
         _settings.Weapons.FreezeAmmo = Keep(_settings.Weapons.FreezeAmmo, "weapons.freezeAmmo");
@@ -779,6 +841,7 @@ internal sealed class MainForm : Form
 
     private void ApplyStatus(ServerStatus status)
     {
+        if (!UsesClientModule) _settings.Silent.Enabled = false;
         UpdateFeatureStates(status.FeatureStates);
         _connectionLabel.Text = status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
             : status.Ready && status.PlayerOnline ? "PERSONAGEM VALIDADO"
@@ -814,17 +877,19 @@ internal sealed class MainForm : Form
         {
             var enabled = !_disconnecting && !_closing && StandaloneUiPolicy.CanEditConfiguration(capability, _capabilitiesKnown, capabilities);
             if (capability == "player.revive")
-                enabled = UsesClientModule && !_reviving && !_suiciding && CanInvokeLocalAction(capability);
+                enabled = UsesClientModule && !_reviving && !_suiciding && !_vehicleActionPending && CanInvokeLocalAction(capability);
             if (capability == "player.suicide")
-                enabled = !_suiciding && !_reviving && CanInvokeSuicide();
-            if (UsesClientModule && capability is ("player.godMode" or "player.noclip" or "player.invisible" or "weapons.freezeAmmo"))
-                enabled = !_suiciding && !_reviving && CanInvokeLocalAction(capability);
-            if (capability == "player.godMode" && (_suiciding || _reviving))
+                enabled = !_suiciding && !_reviving && !_vehicleActionPending && CanInvokeSuicide();
+            if (capability is "vehicle.lock" or "vehicle.unlock")
+                enabled = UsesClientModule && !_suiciding && !_reviving && !_vehicleActionPending && CanInvokeLocalAction(capability);
+            if (UsesClientModule && capability is ("player.godMode" or "player.noclip" or "player.invisible" or "weapons.freezeAmmo" or "silent"))
+                enabled = !_suiciding && !_reviving && !_vehicleActionPending && CanInvokeLocalAction(capability);
+            if (capability == "player.godMode" && (_suiciding || _reviving || _vehicleActionPending))
                 enabled = false;
             if (capability is "weapons.noRecoil" or "weapons.noSpread")
                 enabled &= _healthy && _lastStatus is { Ready: true, PlayerOnline: true } &&
                     _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
-            if (capability == "silent" || (!UsesClientModule && capability is ("player.revive" or "player.noclip" or "weapons.freezeAmmo")))
+            if (!UsesClientModule && capability is ("silent" or "player.revive" or "player.noclip" or "weapons.freezeAmmo"))
                 enabled = false;
             foreach (var control in controls) control.Enabled = enabled;
         }
@@ -832,7 +897,7 @@ internal sealed class MainForm : Form
 
     private async Task ReviveAsync()
     {
-        if (!UsesClientModule || _reviving || _suiciding || !CanInvokeLocalAction("player.revive")) return;
+        if (!UsesClientModule || _reviving || _suiciding || _vehicleActionPending || !CanInvokeLocalAction("player.revive")) return;
         var cancellation = _session!.Token;
         var generation = _connectionGeneration;
         var processId = _lastStatus!.PlayerId;
@@ -893,7 +958,7 @@ internal sealed class MainForm : Form
 
     private async Task SuicideAsync()
     {
-        if (_suiciding || _reviving || !CanInvokeSuicide()) return;
+        if (_suiciding || _reviving || _vehicleActionPending || !CanInvokeSuicide()) return;
         var confirmedGeneration = _connectionGeneration;
         var confirmedProcessId = _lastStatus!.PlayerId;
         var confirmedPlayerEpoch = _client.PlayerEpoch;
@@ -902,7 +967,7 @@ internal sealed class MainForm : Form
                     : "Definir a vida do personagem como zero? GodMode será desativado.",
                 "Confirmar suicídio", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                 MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-        if (_suiciding || _reviving || !CanInvokeSuicide()) return;
+        if (_suiciding || _reviving || _vehicleActionPending || !CanInvokeSuicide()) return;
         if (confirmedGeneration != _connectionGeneration || confirmedProcessId != _lastStatus!.PlayerId ||
             confirmedPlayerEpoch != _client.PlayerEpoch)
         {
@@ -965,6 +1030,77 @@ internal sealed class MainForm : Form
         }
     }
 
+    private async Task SetVehicleLockAsync(bool locked)
+    {
+        var capability = locked ? "vehicle.lock" : "vehicle.unlock";
+        if (!UsesClientModule || _vehicleActionPending || _suiciding || _reviving || !CanInvokeLocalAction(capability)) return;
+        var confirmedGeneration = _connectionGeneration;
+        var confirmedProcessId = _lastStatus!.PlayerId;
+        var confirmedPlayerEpoch = _client.PlayerEpoch;
+        var action = locked ? "Bloquear" : "Desbloquear";
+        if (MessageBox.Show(this,
+                $"{action} as portas do carro ocupado ou do carro mais próximo em até 8 metros? Mantenha-se próximo do mesmo veículo até a conclusão.",
+                $"Confirmar: {action.ToLowerInvariant()} carro", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        if (_vehicleActionPending || _suiciding || _reviving || !CanInvokeLocalAction(capability)) return;
+        if (confirmedGeneration != _connectionGeneration || confirmedProcessId != _lastStatus!.PlayerId ||
+            confirmedPlayerEpoch != _client.PlayerEpoch)
+        {
+            _vehicleActionStatus.Text = "A sessão local mudou. Confirme novamente a ação no personagem atual.";
+            _vehicleActionStatus.ForeColor = Theme.Warning;
+            return;
+        }
+
+        var cancellation = _session!.Token;
+        var generation = _connectionGeneration;
+        var processId = _lastStatus!.PlayerId;
+        var priorSettings = _settingsRequest;
+        _vehicleActionPending = true;
+        _debounce.Stop();
+        _vehicleActionStatus.Text = $"Aguardando o módulo {action.ToLowerInvariant()} as portas do carro…";
+        _vehicleActionStatus.ForeColor = Theme.Muted;
+        UpdateAvailability();
+        try
+        {
+            if (priorSettings is not null) await priorSettings.WaitAsync(cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            if (generation != _connectionGeneration || _closing) return;
+            if (!CanInvokeLocalAction(capability) || _lastStatus?.PlayerId != processId || _client.PlayerEpoch != confirmedPlayerEpoch)
+                throw new InvalidOperationException("A sessão local mudou; confirme novamente a ação no personagem atual.");
+            await _client.SetVehicleLockAsync(locked, confirmedPlayerEpoch, cancellation);
+            if (generation != _connectionGeneration || _closing) return;
+            var message = locked
+                ? "Portas bloqueadas observadas no jogo. Scripts de chaves podem alterar o estado novamente."
+                : "Portas desbloqueadas observadas no jogo. Scripts de chaves podem alterar o estado novamente.";
+            _vehicleActionStatus.Text = message;
+            _vehicleActionStatus.ForeColor = Theme.Text;
+            _revisionLabel.Text = message;
+            AppendLog(message);
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            if (generation != _connectionGeneration || _closing) return;
+            var message = $"{action} carro não confirmado: {error.Message}";
+            _vehicleActionStatus.Text = message;
+            _vehicleActionStatus.ForeColor = Theme.Warning;
+            _revisionLabel.Text = message;
+            AppendLog(message);
+        }
+        finally
+        {
+            if (generation == _connectionGeneration)
+            {
+                _vehicleActionPending = false;
+                if (!_closing)
+                {
+                    UpdateAvailability();
+                    if (_dirty && _healthy && _client.DetectionEnabled && !_debounce.Enabled) _debounce.Start();
+                }
+            }
+        }
+    }
+
     private async Task DisconnectAsync()
     {
         if (_disconnecting) return;
@@ -1005,8 +1141,13 @@ internal sealed class MainForm : Form
         _disconnecting = false;
         _reviving = false;
         _suiciding = false;
+        _vehicleActionPending = false;
         _playerActionStatus.Text = "Ações locais exigem uma sessão ativa. Suicídio pede confirmação.";
         _playerActionStatus.ForeColor = Theme.Muted;
+        _vehicleActionStatus.Text = UsesClientModule
+            ? "Entre no carro ou aproxime-se dele até 8 metros."
+            : "Bloquear e desbloquear exigem o módulo local conectado ao FiveM.";
+        _vehicleActionStatus.ForeColor = Theme.Muted;
         _policy.Disconnect();
         ResetActiveEffects();
         _eventsCursor = 0;

@@ -21,7 +21,7 @@ internal static class ClientModuleInstaller
                 return;
             }
             using var image = Assembly.GetExecutingAssembly().GetManifestResourceStream(ResourceName)
-                ?? throw new InvalidOperationException("Este executável não contém o módulo local. Use o pacote completo da versão 3.2.0 ou posterior.");
+                ?? throw new InvalidOperationException("Este executável não contém o módulo local. Use o pacote completo da versão 3.3.0 ou posterior.");
             using var buffer = new MemoryStream();
             image.CopyTo(buffer);
             var bytes = buffer.ToArray();

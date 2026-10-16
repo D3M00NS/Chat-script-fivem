@@ -1,22 +1,32 @@
-# Validação da versão 3.2.0
+# Validação da versão 3.3.0
 
-SDK .NET8.0.426 e Zig0.15.2. As publicações Windows x64 completa e compacta passaram no Linux, com warnings tratados como erros, sem erros ou avisos. A instalação do módulo no cliente Windows e uma sessão real FiveM não foram executadas aqui.
+As publicações Windows x64 completa e compacta passaram com warnings tratados como erros. A inspeção dos recursos .NET confirmou, em ambas as publicações, que os **452.096 bytes** do ASI embutido correspondem ao módulo nativo compilado. O PE foi validado como DLL AMD64 com recurso `FX_ASI_BUILD` de tipo `3258` e dependências de sistema.
 
-`bash scripts/test.sh` concluiu:
+| Verificação | Resultado |
+| --- | --- |
+| C# portável, incluindo pipes reais com jogo simulado | 14 suítes, 587 assertivas |
+| Provider local, incluído nas suítes C# | 15 cenários, 112 assertivas |
+| Motor nativo com natives simuladas e PE sintético | 28 suítes, 196 assertivas |
+| Disparo direcionado experimental com natives simuladas | 7 suítes, 150 assertivas |
+| HTTP/pareamento local | 30 verificações |
+| Contratos Lua do servidor simulado | 54 verificações |
+| Lua cliente com natives simuladas | 166 assertivas |
+| Integração médica simulada | 25 testes |
+| Pareamento Lua cliente | 51 assertivas |
+| NUI JavaScript | 23 testes, sem falhas ou skips |
 
-- 14 suítes C# portáveis, **538 assertivas**.
-- Dentro dessas suítes, o provedor de módulo possui 10 cenários/71 assertivas com named pipes reais e jogo simulado: ACK pendente, velocidade/voo em espera, épocas/PID, concorrência, corrupção, timeout sem replay, encerramento e perda de autorização com nova conexão sem reaplicar efeitos.
-- 20 suítes C++ / **117 assertivas**, com natives simulados e PE sintético: dependências de capacidades, hover/foco, restauração retida, readbacks, ações e epochs.
-- 30 verificações C# de HTTP/pareamento reais em loopback.
-- 54 contratos servidor, 166 assertivas cliente, 25 contratos médicos e 51 assertivas de pareamento com mocks da integração administrativa anterior.
-- 23 testes NUI, sem falhas ou skips.
+As regressões incluem a recusa de uma ação sem capacidade seguida de outra ação válida, cancelamento fora da trava da sessão, controle e readback de portas, ausência de replay, preservação de GodMode/noclip após falha experimental e leitura de consumo antes da reposição de munição. O resultado experimental permanece disponível ao alternar para o menu para salvar o diagnóstico.
 
-O ASI foi compilado como DLL AMD64 com entry point e recurso customizado `FX_ASI_BUILD`, tipo numérico `3258`. O verificador rejeita saída que não seja PE e imports externos inesperados. Os imports observados são componentes Windows10/11: Kernel32, Advapi32, User32 e contratos UCRT.
+O ambiente de desenvolvimento utiliza SDK .NET 8.0.426, Zig 0.15.2 e compilação cruzada no Linux. Os testes portáveis usam comunicação local real quando indicado e simulam o jogo e as natives; não substituem uma sessão Windows/FiveM.
 
-A inspeção de metadata da assembly comparou os **432128 bytes** do módulo embutido com o ASI compilado, sem carregar código Windows. SHA256 do ASI: `56f988d75c8eff53db5bde5b25c4b1536c314cca6bc7772586ba8019c390f082`.
+As verificações cobrem protocolo 2 e configurações de 48 bytes, capacidades do módulo, perda de conexão, ações sem replay, preservação de estados, controle/readback das portas do veículo e condições do protótipo experimental de Silent Aim. A inspeção do PE e do recurso embutido não carrega código Windows.
 
-Os pacotes incluem os binários dessas publicações, fontes e licenças. O manifest registra resultados e hashes dos binários; `downloads/ZyonMenu-v3.2.0-packages.json` registra os hashes dos ZIPs. Nenhum DLL privado recebido anteriormente foi executado ou redistribuído.
+**Ainda não validado em Windows/FiveM real:** janela WinForms e DPI, instalação e loader do ASI, exports do cliente instalado, política do servidor, controle de rede, chamadas nativas e efeitos dentro do jogo. Não se afirma que todas as funções estejam funcionando nessa sessão real.
 
-**Ainda não validado:** janela WinForms e DPI, instalação/loader real do ASI, exports do cliente efetivamente instalado, políticas do servidor, natives e comportamento dentro do FiveM. O usuário confirmou que poderá fazer essa validação no Windows.
+O Silent Aim usa `SET_PED_SHOOTS_AT_COORD` como protótipo experimental. A presença do handler e o consumo observável de munição não comprovam redirecionamento do tiro, hit ou dano. Enquanto a opção estiver ativa, o tiro normal pode ser impedido, inclusive sem alvo no FOV. A validação exige teste no jogo e diagnóstico do resultado.
 
-Silent Aim, voz recebida, ADMs/nomes e visibilidade continuam sem implementação. O revive do módulo é nativo e não confirma limpeza médica ESX/QBCore. Os testes médicos antigos não estabelecem suporte médico no módulo cliente.
+Bloquear/desbloquear veículo observa apenas o estado nativo das portas após obter controle oficial. Não concede chaves de ESX/QBCore nem confirma persistência diante de scripts de garagem/chaves. O revive é nativo e não confirma limpeza médica desses frameworks.
+
+Voz recebida, ADMs/nomes e visibilidade do ESP externo continuam sem implementação. Testes médicos da integração administrativa anterior não estabelecem suporte médico no módulo cliente.
+
+Os pacotes 3.3.0 devem conter aplicativo e ASI atualizados juntos. O protocolo 2 usa `ZyonClientBridge-v2-<GTA_PID>` e é incompatível com o módulo 3.2.0. Feche o FiveM e execute **Preparar módulo local** novamente antes do teste. Exporte **Salvar diagnóstico** com o jogo aberto se o módulo continuar desconectado.

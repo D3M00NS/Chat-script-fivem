@@ -6,11 +6,15 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 using namespace zyon;
 namespace {
 int assertions = 0;
+// Directed fire uses its own native test fixture and is unavailable in this
+// fixture, whose allowlist covers the established engine and vehicle natives.
+constexpr std::uint32_t EngineBaseCapabilities = KnownCapabilities & ~CapabilityDirectedFireExperimental;
 constexpr std::uint64_t Timer = 0x9CD27B0045628463ULL, LocalPed = 0xD80958FC74E988A6ULL;
 constexpr std::uint64_t GameBuild = 0x804B9F7BULL;
 constexpr std::uint64_t Exists = 0x7239B21A38F536BAULL, IsPed = 0x524AC5ECEA15343EULL, Model = 0x9F47B058362C84B5ULL;
@@ -28,6 +32,9 @@ constexpr std::uint64_t Heading = 0xE83D4F9BA2A38914ULL, ReviveNative = 0xEA23C4
 constexpr std::uint64_t Maximum = 0x15D757606D170C3CULL, Health = 0x6B76DC1F3AE6E6A3ULL, Blood = 0x8FE22675A5A45817ULL;
 constexpr std::uint64_t FreezePosition = 0x428CA6DBD1094446ULL;
 constexpr std::uint64_t PositionFrozen = 0xEDBE6ADDULL;
+constexpr std::uint64_t VehicleIn = 0x9A9112A0FE9A4713ULL, ClosestVehicle = 0xF73EB622C4F1689BULL;
+constexpr std::uint64_t IsVehicle = 0x6AC7003FA6E5575EULL, RequestControl = 0xB69317BF5E782347ULL;
+constexpr std::uint64_t SetDoorLock = 0xB664292EAECF7FA6ULL, DoorLock = 0x25BC98A59C2EA962ULL;
 
 void Check(bool condition, const char* description) {
     ++assertions;
@@ -40,6 +47,8 @@ struct Entity {
     std::uint32_t model = 101;
     bool exists = true, ped = true, dead = false, damageable = true, visible = true, collision = false, frozen = false;
     float x = 0, y = 0, z = 0;
+    bool vehicle = false, controlled = true;
+    std::uint32_t doorLock = 1;
 };
 struct FakeNatives final : INativeInvoker {
     std::map<std::uint32_t, Entity> entities{{1, {}}, {2, {}}};
@@ -49,16 +58,21 @@ struct FakeNatives final : INativeInvoker {
     bool enabled = true, vehicle = false, attached = false, controlled = true, up = false, down = false, fast = false;
     bool ignoreGod = false, ignoreHealth = false, replaceOnRevive = false;
     bool ignoreCoordinates = false, ignoreClip = false;
+    bool ignoreDoorLock = false, controlRequestResult = false, replaceVehicleOnRequest = false, replaceVehicleOnWrite = false;
+    std::uint32_t currentVehicle = 0, closestVehicle = 0;
+    int controlGrantAfter = 0;
     float forward = 0, right = 0, dt = 0.016f, pitch = 0, yaw = 0;
     std::uint64_t failedHash = 0;
     std::set<std::uint64_t> missing;
     std::vector<std::uint32_t> healthTargets;
+    std::vector<std::uint32_t> vehicleTargets;
     bool HasNative(std::uint64_t hash) const noexcept override {
         if (!enabled || missing.count(hash)) return false;
         switch (hash) {
         case Timer: case LocalPed: case GameBuild: case Exists: case IsPed: case Model: case Dead:
         case Damageable: case SetDamageable: case Visible: case SetVisible: case Collision: case SetCollision:
         case PositionFrozen: case FreezePosition:
+        case VehicleIn: case ClosestVehicle: case IsVehicle: case RequestControl: case SetDoorLock: case DoorLock:
         case InVehicle: case Attached: case Control: case Disable: case Normal: case Pressed: case Rotation: case Frame:
         case Coords: case SetCoords: case Velocity: case Weapon: case Total: case Clip: case SetTotal: case SetClip:
         case Heading: case ReviveNative: case Maximum: case Health: case Blood: return true;
@@ -82,6 +96,10 @@ struct FakeNatives final : INativeInvoker {
         if (hash == LocalPed) return integer(localPed);
         if (hash == Rotation) return vector(pitch, 0, yaw);
         if (hash == Frame) return scalar(dt);
+        if (hash == ClosestVehicle) {
+            if (count != 6 || NativeFloat(args[3]) != 8.0f || args[4] || args[5] != 70) return false;
+            return integer(closestVehicle);
+        }
         if (hash == ReviveNative) {
             if (count != 9 || !args[6] || args[7] != 6 || args[8] != 0) return false;
             entities[localPed].dead = false;
@@ -99,6 +117,7 @@ struct FakeNatives final : INativeInvoker {
         auto& entity = found->second;
         switch (hash) {
         case IsPed: return integer(entity.ped);
+        case IsVehicle: return integer(entity.vehicle);
         case Model: return integer(entity.model);
         case Dead: return count == 2 && args[1] == 0 && integer(entity.dead);
         case Damageable: return integer(entity.damageable);
@@ -111,7 +130,20 @@ struct FakeNatives final : INativeInvoker {
         case FreezePosition: if (count != 2) return false; entity.frozen = args[1] != 0; return true;
         case InVehicle: return integer(vehicle);
         case Attached: return integer(attached);
-        case Control: return integer(controlled);
+        case Control: return integer(entity.vehicle ? entity.controlled : controlled);
+        case RequestControl:
+            if (count != 1) return false;
+            if (controlGrantAfter && calls[RequestControl] >= controlGrantAfter) entity.controlled = true;
+            if (replaceVehicleOnRequest) ++entity.model;
+            return integer(controlRequestResult);
+        case VehicleIn: return count == 2 && !args[1] && integer(currentVehicle);
+        case SetDoorLock:
+            if (count != 2 || (args[1] != 1 && args[1] != 2)) return false;
+            vehicleTargets.push_back(ped);
+            if (!ignoreDoorLock) entity.doorLock = static_cast<std::uint32_t>(args[1]);
+            if (replaceVehicleOnWrite) ++entity.model;
+            return true;
+        case DoorLock: return count == 1 && integer(entity.doorLock);
         case Coords: return vector(entity.x, entity.y, entity.z);
         case SetCoords:
             if (count != 7) return false;
@@ -154,6 +186,87 @@ struct Fixture {
     void ActionNow(std::uint32_t action, std::uint64_t nonce = 1, std::uint32_t expectedPed = 1) {
         input.action = action; input.actionNonce = nonce; input.expectedPed = expectedPed;
     }
+    void Car(std::uint32_t handle = 10, float distance = 4, bool occupied = false) {
+        Entity car;
+        car.ped = false; car.vehicle = true; car.model = 808; car.x = distance;
+        fake.entities[handle] = car;
+        fake.closestVehicle = handle;
+        if (occupied) fake.currentVehicle = handle;
+    }
+};
+
+// This opt-in fixture adds only the documented experimental natives. The
+// established engine fixture above continues to reject every extra hash.
+constexpr std::uint64_t DfPlayerId = 0x4F8644AF03D0E0D6ULL, DfActivePlayer = 0xB8DFD30D6973E135ULL;
+constexpr std::uint64_t DfPlayerPed = 0x43A66C31C68491C0ULL, DfReloading = 0x24B100C68C645951ULL;
+constexpr std::uint64_t DfDamageType = 0x3BE0BB12D25FB305ULL, DfPressed = 0xF3A21BCD95725A4AULL;
+constexpr std::uint64_t DfDisableFiring = 0x5E6CC07646BBEAB8ULL, DfScreenSize = 0x873C9F3104101DD3ULL;
+constexpr std::uint64_t DfScreenPoint = 0x34E82F05DF2974F5ULL, DfBone = 0x17C07FC640E86B4EULL;
+constexpr std::uint64_t DfLos = 0xFCDFF7B72D23A1ACULL, DfShoot = 0x96A05E4FB321B1BAULL;
+struct EngineDirectedNatives final : INativeInvoker {
+    FakeNatives base;
+    std::map<std::uint64_t, int> extraCalls;
+    std::uint64_t failedExtra = 0;
+    bool trigger = false;
+    bool HasNative(std::uint64_t hash) const noexcept override {
+        if (base.HasNative(hash)) return true;
+        switch (hash) {
+        case DfPlayerId: case DfActivePlayer: case DfPlayerPed: case DfReloading:
+        case DfDamageType: case DfPressed: case DfDisableFiring: case DfScreenSize:
+        case DfScreenPoint: case DfBone: case DfLos: case DfShoot: return true;
+        default: return false;
+        }
+    }
+    bool Invoke(std::uint64_t hash, const std::uint64_t* args, std::size_t count,
+                NativeResult& result) noexcept override {
+        result = {};
+        if (hash == Pressed && count == 2 && (args[1] == 24 || args[1] == 25)) {
+            result.words[0] = args[1] == 24 ? trigger : true;
+            return true;
+        }
+        if (base.HasNative(hash)) return base.Invoke(hash, args, count, result);
+        ++extraCalls[hash];
+        if (!HasNative(hash) || hash == failedExtra) return false;
+        const auto integer = [&](std::uint32_t value) { result.words[0] = value; return true; };
+        switch (hash) {
+        case DfPlayerId: return count == 0 && integer(0);
+        case DfActivePlayer: return count == 1 && integer(args[0] == 1);
+        case DfPlayerPed: return count == 1 && args[0] == 1 && integer(2);
+        case DfReloading: return count == 1 && integer(false);
+        case DfDamageType: return count == 1 && integer(3);
+        case DfPressed: return count == 2 && integer(args[1] == 24 ? trigger : args[1] == 25);
+        case DfDisableFiring: return count == 2 && args[0] == 0 && args[1] == 1;
+        case DfScreenSize:
+            if (count != 2 || !args[0] || !args[1]) return false;
+            *reinterpret_cast<int*>(static_cast<std::uintptr_t>(args[0])) = 1920;
+            *reinterpret_cast<int*>(static_cast<std::uintptr_t>(args[1])) = 1080;
+            return true;
+        case DfScreenPoint:
+            if (count != 5 || !args[3] || !args[4]) return false;
+            *reinterpret_cast<float*>(static_cast<std::uintptr_t>(args[3])) = 0.5f;
+            *reinterpret_cast<float*>(static_cast<std::uintptr_t>(args[4])) = 0.5f;
+            return integer(true);
+        case DfBone:
+            if (count != 5 || args[0] != 2 || args[2] || args[3] || args[4]) return false;
+            result.words[0] = NativeArg(2.0f); result.words[1] = NativeArg(0.0f); result.words[2] = NativeArg(0.0f);
+            return true;
+        case DfLos: return count == 3 && args[0] == 1 && args[1] == 2 && args[2] == 17 && integer(true);
+        case DfShoot: return count == 5 && args[0] == 1 && args[4] == 1;
+        default: return false;
+        }
+    }
+};
+struct EngineDirectedFixture {
+    EngineDirectedNatives fake;
+    Engine engine{fake};
+    ControlSnapshot input;
+    std::uint64_t now = 1000;
+    EngineDirectedFixture() { input.connected = true; input.sessionEpoch = 1; input.settings.revision = 1; }
+    RuntimeStatus Step(std::uint64_t milliseconds = 16) {
+        now += milliseconds; input.lastSeenMs = now; fake.base.timer += static_cast<std::uint32_t>(milliseconds);
+        engine.Step(input, now); return engine.Status();
+    }
+    RuntimeStatus ReadyNow() { Step(); return Step(); }
 };
 
 void PreflightAndQueuedSettings() {
@@ -162,7 +275,7 @@ void PreflightAndQueuedSettings() {
     Check(f.fake.entities[1].damageable, "queued settings must not write before preflight");
     const auto ready = f.Step();
     Check((ready.stateFlags & (Ready | SettingsActive | PedAlive)) == (Ready | SettingsActive | PedAlive), "second advancing frame validates the ped");
-    Check(ready.capabilities == KnownCapabilities && !f.fake.entities[1].damageable, "queued GodMode becomes observed");
+    Check(ready.capabilities == EngineBaseCapabilities && !f.fake.entities[1].damageable, "queued GodMode becomes observed");
     Check(ready.tick == f.now && ready.build == 3258, "native frame records the verified wall-clock timestamp and observed build");
     Fixture blocked; blocked.fake.entities[1].model = 0;
     Check(!(blocked.ReadyNow().stateFlags & Ready), "zero model cannot establish readiness");
@@ -376,12 +489,19 @@ void NativeAvailabilityIsSpecificAndDoesNotTrustStaleResults() {
         {SetCollision, CapabilityNoclip}, {SetClip, CapabilityFreezeAmmo},
         {PositionFrozen, CapabilityNoclip}, {FreezePosition, CapabilityNoclip},
         {Blood, CapabilityRevive}, {Health, CapabilityRevive | CapabilitySuicide},
-        {Coords, CapabilityNoclip | CapabilityRevive}
+        {Coords, CapabilityNoclip | CapabilityRevive | CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {VehicleIn, CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {ClosestVehicle, CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {IsVehicle, CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {Control, CapabilityNoclip | CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {RequestControl, CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {SetDoorLock, CapabilityLockVehicle | CapabilityUnlockVehicle},
+        {DoorLock, CapabilityLockVehicle | CapabilityUnlockVehicle}
     };
     for (const auto& feature : optional) {
         Fixture f; f.fake.missing.insert(feature.first);
         const auto status = f.ReadyNow();
-        Check((status.stateFlags & Ready) && status.capabilities == (KnownCapabilities & ~feature.second),
+        Check((status.stateFlags & Ready) && status.capabilities == (EngineBaseCapabilities & ~feature.second),
             "missing optional dependency only removes its affected feature capabilities");
         Check(f.fake.calls[feature.first] == 0, "missing optional native never relies on a stale return buffer");
     }
@@ -424,6 +544,210 @@ void NativeWritesRequireObservableReadback() {
     clip.fake.clip = 9; clip.fake.ignoreClip = true; status = clip.Step();
     Check(status.error == EffectFailure && !(status.stateFlags & SettingsActive),
         "a true ammo setter result is insufficient when clip readback did not change");
+}
+void VehicleActionsCaptureCurrentOrNearbyCar() {
+    Fixture current; current.Car(10, 20, true); current.fake.entities[1].dead = true;
+    current.ReadyNow(); current.ActionNow(LockVehicle);
+    auto status = current.Step();
+    Check(status.action == LockVehicle && status.actionResult == Observed && current.fake.entities[10].doorLock == 2,
+        "current vehicle lock confirms its own native result independently of ped death state");
+    Check(current.fake.calls[ClosestVehicle] == 0 && current.fake.calls[RequestControl] == 0,
+        "an already controlled current vehicle needs neither a closest query nor control request");
+    Check(current.fake.vehicleTargets == std::vector<std::uint32_t>{10} && current.fake.calls[SetCoords] == 0,
+        "vehicle lock only writes the captured vehicle doors and never moves an entity");
+    current.ActionNow(UnlockVehicle, 2); status = current.Step();
+    Check(status.actionResult == Observed && current.fake.entities[10].doorLock == 1,
+        "unlock uses exact native door-lock value one");
+
+    Fixture nearby; nearby.Car(20, 8); nearby.fake.entities[20].doorLock = 2;
+    nearby.ReadyNow(); nearby.ActionNow(UnlockVehicle); status = nearby.Step();
+    Check(status.actionResult == Observed && nearby.fake.entities[20].doorLock == 1 && nearby.fake.calls[ClosestVehicle] == 1,
+        "on-foot unlock accepts a valid captured nearby road vehicle exactly eight metres away");
+    nearby.Step();
+    Check(nearby.fake.calls[SetDoorLock] == 1 && nearby.fake.calls[Health] == 0 && nearby.fake.calls[ReviveNative] == 0,
+        "a consumed vehicle nonce is not replayed and never executes a health action");
+}
+void VehicleSelectionRejectsInvalidOrDistantTargets() {
+    Fixture absent; absent.ReadyNow(); absent.ActionNow(LockVehicle);
+    Check(absent.Step().actionResult == Failed && absent.fake.calls[SetDoorLock] == 0,
+        "no nearby or current vehicle fails without a door-lock write");
+    Fixture far; far.Car(10, 8.001f); far.ReadyNow(); far.ActionNow(LockVehicle);
+    Check(far.Step().actionResult == Failed && far.fake.calls[RequestControl] == 0 && far.fake.calls[SetDoorLock] == 0,
+        "an out-of-range closest-native result is independently rejected before requesting control");
+    Fixture diagonal; diagonal.Car(10, 6); diagonal.fake.entities[10].y = 6;
+    diagonal.ReadyNow(); diagonal.ActionNow(LockVehicle);
+    Check(diagonal.Step().actionResult == Failed && diagonal.fake.calls[SetDoorLock] == 0,
+        "nearby radius uses full three-dimensional distance");
+    Fixture type; type.fake.closestVehicle = 2; type.ReadyNow(); type.ActionNow(LockVehicle);
+    Check(type.Step().actionResult == Failed && type.fake.calls[SetDoorLock] == 0,
+        "a ped returned as closest vehicle is rejected by the entity type getter");
+    Fixture missing; missing.Car(); missing.fake.entities[10].exists = false;
+    missing.ReadyNow(); missing.ActionNow(LockVehicle);
+    Check(missing.Step().actionResult == Failed && missing.fake.calls[SetDoorLock] == 0,
+        "an absent vehicle cannot be changed");
+    Fixture model; model.Car(); model.fake.entities[10].model = 0;
+    model.ReadyNow(); model.ActionNow(LockVehicle);
+    Check(model.Step().actionResult == Failed && model.fake.calls[SetDoorLock] == 0,
+        "a vehicle with no model is not a valid captured target");
+    Fixture expected; expected.Car(); expected.ReadyNow(); expected.ActionNow(LockVehicle, 1, 2);
+    Check(expected.Step().actionResult == Failed && expected.fake.calls[ClosestVehicle] == 0,
+        "a vehicle action ticket for a different ped is rejected before target selection");
+}
+void VehicleNetworkControlIsObservedAndBounded() {
+    Fixture denied; denied.Car(); denied.fake.entities[10].controlled = false;
+    denied.fake.controlRequestResult = true; denied.ReadyNow(); denied.ActionNow(LockVehicle);
+    Check(denied.Step().actionResult == Pending && denied.fake.calls[RequestControl] == 1 && denied.fake.calls[SetDoorLock] == 0,
+        "a successful control-request return without observed control permits no write");
+    Check(denied.Step(2000).actionResult == Failed && denied.fake.calls[RequestControl] == 1 && denied.fake.calls[SetDoorLock] == 0,
+        "denied network control times out within two seconds without another request or mutation");
+    denied.fake.entities[10].controlled = true; denied.Step();
+    Check(denied.fake.calls[SetDoorLock] == 0, "a failed action does not replay when control later becomes available");
+
+    Fixture accepted; accepted.Car(); accepted.fake.entities[10].controlled = false;
+    accepted.fake.controlRequestResult = false; accepted.fake.controlGrantAfter = 2;
+    accepted.ReadyNow(); accepted.ActionNow(LockVehicle); accepted.Step();
+    Check(accepted.fake.calls[RequestControl] == 1, "the same game frame makes at most one vehicle control request");
+    const auto status = accepted.Step();
+    Check(status.actionResult == Observed && accepted.fake.calls[RequestControl] == 2 && accepted.fake.calls[SetDoorLock] == 1,
+        "observed control on a later frame permits a single mutation regardless of the request return value");
+
+    Fixture race; race.Car(); race.fake.entities[10].controlled = false;
+    race.fake.controlGrantAfter = 1; race.fake.replaceVehicleOnRequest = true;
+    race.ReadyNow(); race.ActionNow(LockVehicle);
+    Check(race.Step().actionResult == Failed && race.fake.calls[SetDoorLock] == 0,
+        "vehicle model is revalidated after the control request and before mutation");
+}
+void VehicleDoorWritesNeedStableReadback() {
+    Fixture ignored; ignored.Car(); ignored.fake.ignoreDoorLock = true;
+    ignored.ReadyNow(); ignored.ActionNow(LockVehicle);
+    Check(ignored.Step().actionResult == Pending && ignored.fake.calls[SetDoorLock] == 1,
+        "a successful door-lock setter with unchanged readback is still pending");
+    ignored.Step();
+    Check(ignored.fake.calls[SetDoorLock] == 1, "a pending readback never repeats the door-lock setter");
+    Check(ignored.Step(2000).actionResult == Failed && ignored.fake.calls[SetDoorLock] == 1,
+        "unobserved door-lock state eventually fails without a repeated mutation");
+
+    Fixture getter; getter.Car(); getter.fake.failedHash = DoorLock;
+    getter.ReadyNow(); getter.ActionNow(LockVehicle);
+    Check(getter.Step().actionResult == Failed && getter.fake.calls[SetDoorLock] == 1,
+        "an unavailable door-lock readback cannot report success");
+    Fixture setter; setter.Car(); setter.fake.failedHash = SetDoorLock;
+    setter.ReadyNow(); setter.ActionNow(LockVehicle);
+    Check(setter.Step().actionResult == Failed && setter.fake.entities[10].doorLock == 1,
+        "a rejected door-lock invocation is a failed action");
+    Fixture reused; reused.Car(); reused.fake.replaceVehicleOnWrite = true;
+    reused.ReadyNow(); reused.ActionNow(LockVehicle);
+    Check(reused.Step().actionResult == Failed, "a reused vehicle handle after the setter cannot receive an observed acknowledgement");
+
+    Fixture lost; lost.Car(); lost.fake.ignoreDoorLock = true;
+    lost.ReadyNow(); lost.ActionNow(LockVehicle); lost.Step(); lost.fake.entities[10].controlled = false;
+    Check(lost.Step().actionResult == Failed && lost.fake.calls[RequestControl] == 0 && lost.fake.calls[SetDoorLock] == 1,
+        "loss of vehicle control after mutation fails instead of requesting ownership again");
+}
+void VehiclePendingTargetsNeverSwitchOrOutliveTheLease() {
+    Fixture target; target.Car(); target.fake.entities[10].controlled = false;
+    target.ReadyNow(); target.ActionNow(LockVehicle); target.Step();
+    target.Car(20, 1); target.fake.entities[10].controlled = true;
+    Check(target.Step().actionResult == Observed && target.fake.vehicleTargets == std::vector<std::uint32_t>{10},
+        "a closer vehicle appearing while pending never replaces the original captured target");
+
+    Fixture moved; moved.Car(); moved.fake.entities[10].controlled = false;
+    moved.ReadyNow(); moved.ActionNow(LockVehicle); moved.Step(); moved.fake.entities[10].x = 9;
+    moved.fake.entities[10].controlled = true;
+    Check(moved.Step().actionResult == Failed && moved.fake.calls[SetDoorLock] == 0,
+        "a nearby vehicle moving outside the radius cancels before mutation");
+    Fixture entered; entered.Car(10, 0, true); entered.fake.entities[10].controlled = false;
+    entered.ReadyNow(); entered.ActionNow(LockVehicle); entered.Step(); entered.fake.currentVehicle = 0;
+    Check(entered.Step().actionResult == Failed && entered.fake.calls[SetDoorLock] == 0,
+        "leaving the captured occupied vehicle cancels its pending action");
+    Fixture ped; ped.Car(); ped.fake.entities[10].controlled = false;
+    ped.ReadyNow(); ped.ActionNow(LockVehicle); ped.Step(); ped.fake.localPed = 2;
+    Check(ped.Step().actionResult == Failed && ped.fake.calls[SetDoorLock] == 0,
+        "ped replacement cancels a vehicle request without changing its captured target");
+
+    Fixture lease; lease.Car(); lease.fake.entities[10].controlled = false;
+    lease.ReadyNow(); lease.ActionNow(LockVehicle, 500); lease.Step();
+    lease.now += LeaseMilliseconds + 1; lease.fake.timer += static_cast<std::uint32_t>(LeaseMilliseconds + 1);
+    lease.engine.Step(lease.input, lease.now);
+    Check(lease.engine.Status().actionResult == Failed && lease.engine.Status().error == LeaseOrOffline,
+        "expired lease cancels a pending vehicle control request");
+    lease.fake.entities[10].controlled = true; lease.Step();
+    Check(lease.fake.calls[SetDoorLock] == 0, "refreshing an expired vehicle-action epoch cannot replay its write");
+    ++lease.input.sessionEpoch; lease.input.action = NoAction; lease.input.actionNonce = 0; lease.ReadyNow();
+    lease.ActionNow(LockVehicle, 1);
+    Check(lease.Step().actionResult == Observed && lease.fake.calls[SetDoorLock] == 1,
+        "a fresh epoch and explicit low nonce can perform its own new vehicle action");
+    lease.fake.entities[10].doorLock = 1; lease.ActionNow(LockVehicle, 1); lease.Step();
+    Check(lease.fake.calls[SetDoorLock] == 1 && lease.fake.entities[10].doorLock == 1,
+        "repeating an already consumed vehicle nonce cannot reapply it");
+}
+void ProtocolV2SettingsAreBoundedBeforeNativeExecution() {
+    Check(ProtocolVersion == 2 && sizeof(SettingsPacket) == 48 && sizeof(ActionPacket) == 32,
+        "protocol two enlarges settings while retaining fixed action framing");
+    Settings valid;
+    Check(SettingsInRange(valid), "native settings defaults are inside the protocol two contract");
+    valid.flags = DirectedFireExperimental; valid.silentFov = 10; valid.silentOptions = 1;
+    Check(SettingsInRange(valid), "experimental settings accept their lower FOV boundary and required players-only bit");
+    valid.silentFov = 500; valid.silentBone = 2; valid.silentActivation = 4; valid.silentOptions = 3;
+    Check(SettingsInRange(valid), "experimental settings accept their documented upper boundaries");
+    const Settings defaults;
+    Settings invalid[] = {defaults, defaults, defaults, defaults, defaults, defaults, defaults, defaults};
+    invalid[0].silentFov = 9; invalid[1].silentFov = 501; invalid[2].silentBone = 3;
+    invalid[3].silentActivation = 5; invalid[4].silentOptions = 0; invalid[5].silentOptions = 2;
+    invalid[6].silentOptions = 5; invalid[7].flags = 1u << 4;
+    for (const auto& settings : invalid) {
+        Check(!SettingsInRange(settings), "unknown or out-of-range protocol two configuration is rejected");
+        Fixture f; f.input.settings = settings; f.input.settings.revision = 1;
+        const auto status = f.ReadyNow();
+        Check(status.error == EffectFailure && !(status.stateFlags & SettingsActive),
+            "direct engine calls enforce the same settings boundaries as the transport");
+    }
+}
+void DirectedFailurePreservesIndependentEffectsAndRequiresNewRevision() {
+    EngineDirectedFixture f;
+    f.input.settings.flags = GodMode | Noclip | DirectedFireExperimental;
+    f.fake.failedExtra = DfDisableFiring;
+    auto status = f.ReadyNow();
+    Check((status.capabilities & CapabilityDirectedFireExperimental) && (status.stateFlags & Ready) &&
+        !(status.stateFlags & Blocked) && status.error == EffectFailure,
+        "a failed experimental native reports error thirteen while retaining native readiness");
+    Check(!f.fake.base.entities[1].damageable && f.fake.base.entities[1].collision && f.fake.base.entities[1].frozen,
+        "an experimental failure preserves independently observed GodMode and noclip effects");
+    const auto suppressionAttempts = f.fake.extraCalls[DfDisableFiring];
+    f.fake.failedExtra = 0; status = f.Step();
+    Check(f.fake.extraCalls[DfDisableFiring] == suppressionAttempts && f.fake.extraCalls[DfShoot] == 0 &&
+        status.error == EffectFailure,
+        "a failed experimental revision never redispatches or suppresses normal firing after recovery");
+    Check(!f.fake.base.entities[1].damageable && f.fake.base.entities[1].collision && f.fake.base.entities[1].frozen,
+        "subsequent frames keep unrelated native effects active despite the experimental error");
+    f.input.settings.flags = GodMode | Noclip; ++f.input.settings.revision;
+    status = f.Step();
+    Check(status.error == NoError && (status.stateFlags & SettingsActive) && status.appliedRevision == f.input.settings.revision &&
+        f.fake.extraCalls[DfDisableFiring] == suppressionAttempts,
+        "a fresh revision disabling the experiment clears its failure without suppressing normal firing");
+    Check(!f.fake.base.entities[1].damageable && f.fake.base.entities[1].collision,
+        "disabling the failed experiment preserves the requested independent effects");
+}
+void DirectedConsumptionIsObservedBeforeAmmoRestoration() {
+    EngineDirectedFixture f;
+    f.input.settings.flags = FreezeAmmo | DirectedFireExperimental;
+    auto status = f.ReadyNow();
+    Check(status.error == NoError && (status.stateFlags & SettingsActive),
+        "freeze ammo and experimental directed fire may be enabled together");
+    f.fake.trigger = true; status = f.Step();
+    Check(f.fake.extraCalls[DfShoot] == 1 && std::string(status.message).find("waiting up to 500 ms") != std::string::npos,
+        "a dispatch with delayed ammunition consumption remains pending with a visible status");
+    const auto totalReads = f.fake.base.calls[Total];
+    f.Step();
+    Check(f.fake.base.calls[Total] == totalReads + 1 && f.fake.base.calls[SetTotal] == 0 && f.fake.base.calls[SetClip] == 0,
+        "pending consumption uses its own ammunition sample while the freeze controller stays suspended");
+    f.fake.base.total = 49; f.fake.base.clip = 9;
+    status = f.Step();
+    Check(status.error == NoError && std::string(status.message).find("Consumption observed") != std::string::npos,
+        "directed-fire observation sees delayed ammunition consumption before freeze can erase it");
+    Check(f.fake.base.total == 50 && f.fake.base.clip == 10 && f.fake.base.calls[SetTotal] == 1 &&
+        f.fake.base.calls[SetClip] == 1 && f.fake.extraCalls[DfShoot] == 1,
+        "freeze replenishment resumes after consumption observation without dispatching an additional shot");
 }
 void PublicExportLookupRequiresAnUnambiguousValidPeExport() {
     constexpr const char* prefix = "?GetNativeHandler@scrEngine@rage@@";
@@ -468,6 +792,14 @@ int main() {
         {"native availability", NativeAvailabilityIsSpecificAndDoesNotTrustStaleResults},
         {"setter observations", NativeWritesRequireObservableReadback},
         {"action queue epochs", ActionQueueDoesNotReusePreviousEpochObservations},
+        {"vehicle current and nearby", VehicleActionsCaptureCurrentOrNearbyCar},
+        {"vehicle target validation", VehicleSelectionRejectsInvalidOrDistantTargets},
+        {"vehicle control deadline", VehicleNetworkControlIsObservedAndBounded},
+        {"vehicle door readback", VehicleDoorWritesNeedStableReadback},
+        {"vehicle target and epoch lifetime", VehiclePendingTargetsNeverSwitchOrOutliveTheLease},
+        {"protocol two settings", ProtocolV2SettingsAreBoundedBeforeNativeExecution},
+        {"experimental failure isolation", DirectedFailurePreservesIndependentEffectsAndRequiresNewRevision},
+        {"experimental ammunition ordering", DirectedConsumptionIsObservedBeforeAmmoRestoration},
         {"public export lookup", PublicExportLookupRequiresAnUnambiguousValidPeExport}
     };
     for (const auto& test : tests) {

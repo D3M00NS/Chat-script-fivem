@@ -235,13 +235,14 @@ void Serve(HANDLE pipe, std::uint64_t epoch) noexcept {
     bool hello = false;
     while (!Stopping()) {
         PacketHeader header{};
-        std::uint8_t payload[32]{};
+        std::uint8_t payload[sizeof(SettingsPacket)]{};
         if (!ReadExact(pipe, &header, sizeof(header), GetTickCount64() + 3500)) break;
         const auto kind = static_cast<PacketKind>(header.kind);
         const bool small = kind == PacketKind::Hello || kind == PacketKind::Poll || kind == PacketKind::Disconnect;
-        const bool large = kind == PacketKind::Settings || kind == PacketKind::Action;
+        const auto expectedLength = small ? sizeof(TokenPacket) : kind == PacketKind::Settings ? sizeof(SettingsPacket) :
+            kind == PacketKind::Action ? sizeof(ActionPacket) : 0u;
         if (header.magic != ProtocolMagic || header.version != ProtocolVersion || header.reserved ||
-            (!small && !large) || header.length != (small ? 16u : 32u)) break;
+            !expectedLength || header.length != expectedLength) break;
         if (!ReadExact(pipe, payload, header.length, GetTickCount64() + 500)) break;
         if (!hello) {
             if (kind != PacketKind::Hello || !NonzeroToken(payload)) break;
@@ -268,12 +269,14 @@ void Serve(HANDLE pipe, std::uint64_t epoch) noexcept {
         if (kind == PacketKind::Settings) {
             SettingsPacket packet;
             std::memcpy(&packet, payload, sizeof(packet));
+            const Settings candidate{packet.revision, packet.flags, packet.speed, packet.silentFov,
+                packet.silentBone, packet.silentActivation, packet.silentOptions};
             if (!packet.revision || packet.revision <= shared.control.settings.revision) {
                 error = StaleRevisionOrNonce; message = "Settings revision must increase within this connection.";
-            } else if ((packet.flags & ~KnownSettingFlags) || packet.speed < 1 || packet.speed > 50) {
-                error = ProtocolInvalid; message = "Unsupported setting flags or noclip speed outside 1..50.";
+            } else if (!SettingsInRange(candidate)) {
+                error = ProtocolInvalid; message = "Unsupported setting flags, noclip speed or directed-fire configuration.";
             } else {
-                shared.control.settings = {packet.revision, packet.flags, packet.speed};
+                shared.control.settings = candidate;
             }
         } else if (kind == PacketKind::Action) {
             ActionPacket packet;
@@ -282,7 +285,8 @@ void Serve(HANDLE pipe, std::uint64_t epoch) noexcept {
             const bool pending = shared.runtimeEpoch == epoch && shared.runtime.actionResult == Pending;
             if (!packet.nonce || packet.nonce <= shared.control.actionNonce) {
                 error = StaleRevisionOrNonce; message = "Action nonce must increase within this connection.";
-            } else if (!packet.expectedPed || (packet.action != Revive && packet.action != Suicide)) {
+            } else if (!packet.expectedPed || (packet.action != Revive && packet.action != Suicide &&
+                       packet.action != LockVehicle && packet.action != UnlockVehicle)) {
                 error = ProtocolInvalid; message = "Action requires a valid action kind and captured player ped.";
             } else if (queued || pending) {
                 error = ActionBusy; message = "Wait for the previous native action to finish.";
@@ -326,7 +330,7 @@ DWORD WINAPI PipeWorker(void*) noexcept {
     if (!descriptor) return 1;
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
     wchar_t name[128]{};
-    std::swprintf(name, sizeof(name) / sizeof(name[0]), L"\\\\.\\pipe\\ZyonClientBridge-v1-%lu", GetCurrentProcessId());
+    std::swprintf(name, sizeof(name) / sizeof(name[0]), L"\\\\.\\pipe\\ZyonClientBridge-v2-%lu", GetCurrentProcessId());
     std::uint64_t epoch = 0;
     while (!Stopping()) {
         HANDLE pipe = CreateNamedPipeW(name, PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,

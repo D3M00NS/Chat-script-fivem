@@ -6,7 +6,7 @@
 namespace zyon {
 
 constexpr std::uint32_t ProtocolMagic = 0x4E4F595A;
-constexpr std::uint16_t ProtocolVersion = 1;
+constexpr std::uint16_t ProtocolVersion = 2;
 constexpr std::uint64_t LeaseMilliseconds = 3000;
 constexpr std::uint64_t MaximumFrameAgeMilliseconds = 1000;
 
@@ -15,21 +15,24 @@ enum class PacketKind : std::uint16_t {
 };
 
 enum SettingFlag : std::uint32_t {
-    GodMode = 1u << 0, Noclip = 1u << 1, Invisible = 1u << 2, FreezeAmmo = 1u << 3
+    GodMode = 1u << 0, Noclip = 1u << 1, Invisible = 1u << 2, FreezeAmmo = 1u << 3,
+    DirectedFireExperimental = 1u << 8
 };
-constexpr std::uint32_t KnownSettingFlags = GodMode | Noclip | Invisible | FreezeAmmo;
+constexpr std::uint32_t KnownSettingFlags = GodMode | Noclip | Invisible | FreezeAmmo | DirectedFireExperimental;
 
 enum Capability : std::uint32_t {
     CapabilityGodMode = 1u << 0, CapabilityNoclip = 1u << 1,
     CapabilityInvisible = 1u << 2, CapabilityFreezeAmmo = 1u << 3,
-    CapabilityRevive = 1u << 4, CapabilitySuicide = 1u << 5
+    CapabilityRevive = 1u << 4, CapabilitySuicide = 1u << 5,
+    CapabilityLockVehicle = 1u << 6, CapabilityUnlockVehicle = 1u << 7,
+    CapabilityDirectedFireExperimental = 1u << 8
 };
-constexpr std::uint32_t KnownCapabilities = 0x3F;
+constexpr std::uint32_t KnownCapabilities = 0x1FF;
 
 enum StateFlag : std::uint32_t {
     Ready = 1u << 0, SettingsActive = 1u << 1, PedAlive = 1u << 2, Blocked = 1u << 3
 };
-enum Action : std::uint32_t { NoAction = 0, Revive = 1, Suicide = 2 };
+enum Action : std::uint32_t { NoAction = 0, Revive = 1, Suicide = 2, LockVehicle = 3, UnlockVehicle = 4 };
 enum ActionResult : std::uint32_t { NoResult = 0, Pending = 1, Observed = 2, Failed = 3 };
 enum Error : std::uint32_t {
     NoError = 0, WaitingNative = 10, Unavailable = 11, InvalidPed = 12,
@@ -43,7 +46,13 @@ struct Settings {
     std::uint64_t revision = 0;
     std::uint32_t flags = 0;
     std::uint32_t speed = 5;
+    std::uint32_t silentFov = 100, silentBone = 0, silentActivation = 0, silentOptions = 3;
 };
+inline bool SettingsInRange(const Settings& settings) noexcept {
+    return !(settings.flags & ~KnownSettingFlags) && settings.speed >= 1 && settings.speed <= 50 &&
+        settings.silentFov >= 10 && settings.silentFov <= 500 && settings.silentBone <= 2 &&
+        settings.silentActivation <= 4 && !(settings.silentOptions & ~3u) && (settings.silentOptions & 1u);
+}
 struct ControlSnapshot {
     Settings settings{};
     std::uint64_t sessionEpoch = 0;
@@ -92,6 +101,7 @@ struct SettingsPacket {
     std::uint64_t revision = 0;
     std::uint32_t flags = 0;
     std::uint32_t speed = 5;
+    std::uint32_t silentFov = 100, silentBone = 0, silentActivation = 0, silentOptions = 3;
 };
 struct ActionPacket {
     std::uint8_t token[16]{};
@@ -119,7 +129,11 @@ struct StatusPacket {
 
 static_assert(sizeof(PacketHeader) == 16);
 static_assert(sizeof(TokenPacket) == 16);
-static_assert(sizeof(SettingsPacket) == 32);
+static_assert(sizeof(SettingsPacket) == 48);
+static_assert(offsetof(SettingsPacket, silentFov) == 32);
+static_assert(offsetof(SettingsPacket, silentBone) == 36);
+static_assert(offsetof(SettingsPacket, silentActivation) == 40);
+static_assert(offsetof(SettingsPacket, silentOptions) == 44);
 static_assert(sizeof(ActionPacket) == 32);
 static_assert(sizeof(StatusPacket) == 240);
 static_assert(offsetof(StatusPacket, message) == 80);

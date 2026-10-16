@@ -60,14 +60,18 @@ for flavor, folder in (("completo", "win-x64"), ("compacto", "compacto")):
         "defaultBackend": "client-module",
         "externalOnlyArgument": "--external",
         "implementedExternalFunctions": ["aim", "esp", "godMode", "noRecoil", "noSpread", "suicideHealthWrite"],
-        "implementedClientModuleFunctions": ["godMode", "noclip", "invisibility", "freezeAmmo", "nativeRevive", "suicide"],
+        "implementedClientModuleFunctions": ["godMode", "noclip", "invisibility", "freezeAmmo", "nativeRevive", "suicide", "lockVehicle", "unlockVehicle"],
+        "experimentalClientModuleFunctions": ["directedNativeFire"],
+        "clientModuleProtocolVersion": 2,
+        "directedNativeFireRedirectsOriginalProjectile": False,
+        "vehicleLocksGrantFrameworkKeys": False,
         "clientModuleRequirements": ["local FiveM.app/plugins module", "game build 3258", "server already permits ScriptHook", "pure level below 2"],
         "nativeReviveResetsMedicalFrameworkState": False,
         "nativeModule": {"file": "ZyonClient.asi", "embeddedInExecutable": True,
                          "bytes": native_module.stat().st_size,
                          "sha256": hashlib.sha256(native_module.read_bytes()).hexdigest()},
         "implementationDoesNotEstablishGameplayValidation": True,
-        "unavailableFunctions": ["silentAim", "frameworkMedicalRevive", "muteReceivedVoice", "adminEsp", "playerNames", "lineOfSight"],
+        "unavailableFunctions": ["originalProjectileSilentAim", "frameworkMedicalRevive", "muteReceivedVoice", "adminEsp", "playerNames", "espLineOfSight"],
         "verification": validation,
         "binaries": [{"file": path.name, "bytes": path.stat().st_size,
                       "sha256": hashlib.sha256(path.read_bytes()).hexdigest()} for path in binary_files],
@@ -81,15 +85,19 @@ for flavor, folder in (("completo", "win-x64"), ("compacto", "compacto")):
         "3. Na engrenagem/Conexao, use Preparar modulo local e selecione FiveM.app da sua instalacao.\n"
         "4. Abra o FiveM novamente e entre no servidor. Aguarde a confirmacao do modulo e das capacidades.\n"
         "5. Noclip usa W/A/S/D, Espaco, Ctrl e Shift; velocidade1-50m/s muda durante o voo.\n"
-        "6. Apos testar, use Salvar diagnostico e envie o JSON com o resultado de cada funcao.\n\n"
+        "6. Veiculo: bloqueia/desbloqueia o carro ocupado ou mais proximo ate8m, se houver controle nativo.\n"
+        "7. Silent Aim experimental: solte o gatilho, mire e pressione LMB+ativacao. Uma tentativa por pressionamento; somente jogadores.\n"
+        "   Enquanto ativo, suprime a entrada normal de tiro inclusive sem alvo. Nao comprova redirecionamento do tiro original nem acerto.\n"
+        "8. Apos testar, use Salvar diagnostico e envie o JSON com o resultado de cada funcao.\n\n"
         + runtime_note + "\n"
         "Nenhum arquivo e instalado no servidor. O modulo local so funciona onde plugins/ScriptHook ja sao permitidos e pure<2.\n"
         "O modulo implementa GodMode, noclip/voar, invisibilidade, Freeze Ammo, revive nativo e suicidio; teste no Windows ainda pendente.\n"
-        "Reviver nativo NAO limpa morte/hospital ESX/QBCore. Silent Aim, voz recebida, ADMs/nomes e oclusao continuam pendentes.\n"
+        "Reviver nativo NAO limpa morte/hospital ESX/QBCore. Bloqueio nativo NAO concede chaves do framework.\n"
+        "Silent Aim oferece apenas disparo direcionado experimental. Voz recebida, ADMs/nomes e oclusao ESP continuam pendentes.\n"
         "Aim/ESP/recoil/spread usam o backend de memoria b3258 e suas validacoes.\n"
         "Para usar somente o backend externo anterior: Abrir-somente-externo.cmd ou ZyonMenu.exe --external.\n"
         "Compilacao e verificacoes automatizadas registradas no manifest. Windows/FiveM real nao executados aqui.\n"
-        "Consulte codigo-fonte/README.md e codigo-fonte/docs/client-module-3.2.0.md.\n"
+        "Consulte codigo-fonte/README.md e codigo-fonte/docs/client-module-3.3.0.md.\n"
     )
     archive = OUTPUT / f"{PREFIX}-{flavor}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:

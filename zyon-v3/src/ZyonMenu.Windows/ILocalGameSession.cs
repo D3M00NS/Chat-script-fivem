@@ -14,6 +14,8 @@ internal interface ILocalGameSession : IDisposable
     Task ReviveAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default);
     Task SuicideAsync(CancellationToken cancellationToken = default);
     Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default);
+    Task SetVehicleLockAsync(bool locked, CancellationToken cancellationToken = default);
+    Task SetVehicleLockAsync(bool locked, long expectedPlayerEpoch, CancellationToken cancellationToken = default);
     Task DisconnectAsync(CancellationToken cancellationToken = default);
     string CaptureDiagnostics();
 }

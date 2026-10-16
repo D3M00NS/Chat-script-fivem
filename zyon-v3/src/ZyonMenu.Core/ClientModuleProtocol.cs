@@ -9,13 +9,14 @@ public enum ClientModuleKind : ushort { Hello = 1, Settings = 2, Action = 3, Sta
 [Flags]
 public enum ClientModuleCapabilities : uint
 {
-    None = 0, God = 1, Noclip = 2, Invisible = 4, FreezeAmmo = 8, ReviveNative = 16, Suicide = 32
+    None = 0, God = 1, Noclip = 2, Invisible = 4, FreezeAmmo = 8, ReviveNative = 16, Suicide = 32,
+    LockVehicle = 64, UnlockVehicle = 128, DirectedFireExperimental = 256
 }
 [Flags]
-public enum ClientModuleSettingsFlags : uint { None = 0, God = 1, Noclip = 2, Invisible = 4, FreezeAmmo = 8 }
+public enum ClientModuleSettingsFlags : uint { None = 0, God = 1, Noclip = 2, Invisible = 4, FreezeAmmo = 8, DirectedFireExperimental = 256 }
 [Flags]
 public enum ClientModuleStateFlags : uint { None = 0, Ready = 1, SettingsActive = 2, PedAlive = 4, Blocked = 8 }
-public enum ClientModuleAction : uint { None = 0, ReviveNative = 1, Suicide = 2 }
+public enum ClientModuleAction : uint { None = 0, ReviveNative = 1, Suicide = 2, LockVehicle = 3, UnlockVehicle = 4 }
 public enum ClientModuleActionResult : uint { None = 0, Pending = 1, Observed = 2, Failed = 3 }
 
 public readonly record struct ClientModuleHeader(ClientModuleKind Kind, int PayloadLength);
@@ -29,14 +30,15 @@ public static class ClientModuleProtocol
 {
     public const int HeaderLength = 16, TokenLength = 16, StatusPayloadLength = 240;
     public const uint Magic = 0x4E4F595A;
-    public const ushort Version = 1;
+    public const ushort Version = 2;
     public const int MaximumNativeFrameAgeMilliseconds = 1000;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static int PayloadLength(ClientModuleKind kind) => kind switch
     {
         ClientModuleKind.Hello or ClientModuleKind.Poll or ClientModuleKind.Disconnect => 16,
-        ClientModuleKind.Settings or ClientModuleKind.Action => 32,
+        ClientModuleKind.Settings => 48,
+        ClientModuleKind.Action => 32,
         ClientModuleKind.Status => StatusPayloadLength,
         _ => throw new InvalidDataException("Tipo de mensagem local desconhecido.")
     };
@@ -70,23 +72,35 @@ public static class ClientModuleProtocol
         return token.ToArray();
     }
 
-    public static byte[] SettingsPayload(ReadOnlySpan<byte> token, ulong revision, ClientModuleSettingsFlags flags, uint speed)
+    public static byte[] SettingsPayload(ReadOnlySpan<byte> token, ulong revision, ClientModuleSettingsFlags flags, uint speed,
+        AimSettings? directedFire = null)
     {
         ValidateToken(token);
-        if (revision is 0 or > long.MaxValue || ((uint)flags & ~15u) != 0 || speed is < 1 or > 50)
+        if (revision is 0 or > long.MaxValue || ((uint)flags & ~271u) != 0 || speed is < 1 or > 50)
             throw new ArgumentOutOfRangeException(nameof(revision), "Configuração local fora do contrato.");
-        byte[] bytes = new byte[32];
+        // Inactive UI preferences are not part of this module's execution contract.
+        directedFire = flags.HasFlag(ClientModuleSettingsFlags.DirectedFireExperimental)
+            ? directedFire ?? new AimSettings() : new AimSettings();
+        directedFire.Validate();
+        if (!directedFire.OnlyPlayers || directedFire.DrawFov || directedFire.Smooth != 1)
+            throw new ArgumentException("Parâmetros não suportados pelo disparo direcionado experimental.", nameof(directedFire));
+        byte[] bytes = new byte[48];
         token.CopyTo(bytes);
         BinaryPrimitives.WriteUInt64LittleEndian(bytes.AsSpan(16), revision);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(24), (uint)flags);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(28), speed);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(32), (uint)directedFire.Fov);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(36), directedFire.TargetBone switch { "Head" => 0u, "Neck" => 1u, _ => 2u });
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(40), directedFire.ActivationKey switch
+            { "RMB" => 0u, "LMB" => 1u, "Alt" => 2u, "Shift" => 3u, _ => 4u });
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(44), 1u | (directedFire.OnlyVisible ? 2u : 0u));
         return bytes;
     }
 
     public static byte[] ActionPayload(ReadOnlySpan<byte> token, ulong nonce, ClientModuleAction action, uint expectedPed)
     {
         ValidateToken(token);
-        if (nonce is 0 or > long.MaxValue || action is not (ClientModuleAction.ReviveNative or ClientModuleAction.Suicide) || expectedPed == 0)
+        if (nonce is 0 or > long.MaxValue || action is not (ClientModuleAction.ReviveNative or ClientModuleAction.Suicide or ClientModuleAction.LockVehicle or ClientModuleAction.UnlockVehicle) || expectedPed == 0)
             throw new ArgumentOutOfRangeException(nameof(nonce), "Ação local fora do contrato.");
         byte[] bytes = new byte[32];
         token.CopyTo(bytes);
@@ -198,11 +212,11 @@ public static class ClientModuleProtocol
     private static void ValidateStatus(ClientModuleStatus status)
     {
         ArgumentNullException.ThrowIfNull(status);
-        if (((uint)status.Capabilities & ~63u) != 0 || ((uint)status.StateFlags & ~15u) != 0 ||
+        if (((uint)status.Capabilities & ~511u) != 0 || ((uint)status.StateFlags & ~15u) != 0 ||
             status.DesiredRevision > long.MaxValue || status.AppliedRevision > status.DesiredRevision || status.ActionNonce > long.MaxValue ||
             status.NativeTick > long.MaxValue || status.Build is not (0 or 3258) ||
             status.Error is not (0 or 10 or 11 or 12 or 13 or 14 or 15 or 1001 or 1002 or 1003 or 1004 or 1005) ||
-            status.Action is not (ClientModuleAction.None or ClientModuleAction.ReviveNative or ClientModuleAction.Suicide) ||
+            status.Action is not (ClientModuleAction.None or ClientModuleAction.ReviveNative or ClientModuleAction.Suicide or ClientModuleAction.LockVehicle or ClientModuleAction.UnlockVehicle) ||
             status.ActionResult is not (ClientModuleActionResult.None or ClientModuleActionResult.Pending or ClientModuleActionResult.Observed or ClientModuleActionResult.Failed))
             throw new InvalidDataException("Campos do estado local fora do contrato.");
         bool noAction = status.ActionNonce == 0;

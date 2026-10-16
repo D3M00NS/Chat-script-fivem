@@ -17,10 +17,13 @@ internal static class ClientModuleSessionChecks
         var checks = new Checks();
         Func<Checks, Task>[] scenarios = [SeparationAsync, PendingAcknowledgementAsync, NativeOnlyAndStalenessAsync,
             AuthorizationLossAsync, TargetEpochAsync, SettingsActionFenceAsync, NonceAndObservationAsync, MalformedPollRecoveryAsync,
-            TimeoutNoReplayAsync, DisconnectAndDisposeAsync];
+            TimeoutNoReplayAsync, ExperimentalDirectedFireSettingsAsync, VehicleActionsAsync, VehicleCapabilitiesAsync, VehicleTimeoutNoReplayAsync,
+            VehicleTargetAndCancellationAsync, DisconnectAndDisposeAsync];
         foreach (var scenario in scenarios)
         {
-            try { await scenario(checks).WaitAsync(TimeSpan.FromSeconds(15)); }
+            // Bound the invocation as well as its awaits: an accidentally held
+            // Monitor must fail this scenario without blocking the test runner.
+            try { await Task.Run(() => scenario(checks)).WaitAsync(TimeSpan.FromSeconds(15)); }
             catch (TimeoutException exception)
             { throw new InvalidOperationException("Provider scenario exceeded its bounded deadline: " + scenario.Method.Name, exception); }
         }
@@ -321,6 +324,200 @@ internal static class ClientModuleSessionChecks
         pipe.ThrowIfFaulted();
     }
 
+    private static async Task VehicleActionsAsync(Checks checks)
+    {
+        foreach (bool alive in new[] { true, false })
+        {
+            var external = new MemoryProvider { Ready = false };
+            await using var pipe = new ModulePipe { Alive = alive };
+            using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+            await ReadyAsync(provider);
+            var settings = Settings(); settings.Player.GodMode = settings.Player.Noclip = true;
+            await provider.PushSettingsAsync(settings);
+            long epoch = provider.PlayerEpoch;
+            await provider.SetVehicleLockAsync(true, epoch);
+            await provider.SetVehicleLockAsync(false);
+            var actions = pipe.Requests.Where(item => item.Kind == ClientModuleKind.Action).ToArray();
+            checks.That(actions.Length == 2 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(actions[0].Payload.AsSpan(24)) == (uint)ClientModuleAction.LockVehicle &&
+                BinaryPrimitives.ReadUInt32LittleEndian(actions[1].Payload.AsSpan(24)) == (uint)ClientModuleAction.UnlockVehicle,
+                "Vehicle buttons must dispatch the explicit lock/unlock operation without substituting a health action.");
+            checks.That(BinaryPrimitives.ReadUInt64LittleEndian(actions[0].Payload.AsSpan(16)) == 1 &&
+                BinaryPrimitives.ReadUInt64LittleEndian(actions[1].Payload.AsSpan(16)) == 2 &&
+                actions.All(item => BinaryPrimitives.ReadUInt32LittleEndian(item.Payload.AsSpan(28)) == pipe.Ped),
+                "Each door action must carry a unique nonce and the captured ped.");
+            checks.That(pipe.Count(ClientModuleKind.Settings) == 1 &&
+                BinaryPrimitives.ReadUInt32LittleEndian(pipe.Requests.Single(item => item.Kind == ClientModuleKind.Settings).Payload.AsSpan(24)) == 3,
+                "Door actions must preserve GodMode/noclip rather than dispatch disabling settings.");
+            var status = await provider.GetStatusAsync();
+            checks.That(status.SessionActive && status.FeatureStates.Single(item => item.Name == "player.godMode").State == "observed" &&
+                status.FeatureStates.Single(item => item.Name == "player.noclip").State == "observed",
+                "An observed door action must retain the applied native configuration.");
+            var observations = (await provider.GetEventsAsync(0)).Events.Where(item => item.Type == "observed").ToArray();
+            checks.That(observations.Length == 2 && observations.All(item => item.Message.Contains("framework", StringComparison.Ordinal)) &&
+                external.VehicleActions == 0 && external.Revives == 0 && external.Suicides == 0,
+                "Vehicle success requires its native observation and must not claim framework keys or delegate a memory/health action.");
+            using var diagnostics = JsonDocument.Parse(provider.CaptureDiagnostics());
+            uint state = diagnostics.RootElement.GetProperty("Native").GetProperty("State").GetProperty("StateFlags").GetUInt32();
+            checks.That(((state & (uint)ClientModuleStateFlags.PedAlive) != 0) == alive,
+                "Lock/unlock observations must preserve and accept the existing alive state.");
+            pipe.ThrowIfFaulted();
+        }
+    }
+
+    private static async Task ExperimentalDirectedFireSettingsAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = true, ProcessId = 101 };
+        await using var pipe = new ModulePipe();
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await ReadyAsync(provider);
+        var settings = Settings();
+        settings.Player.GodMode = true;
+        settings.Silent.Enabled = settings.Silent.OnlyVisible = true;
+        settings.Silent.Fov = 157; settings.Silent.TargetBone = "Chest"; settings.Silent.ActivationKey = "Ctrl";
+        await provider.PushSettingsAsync(settings);
+        var request = pipe.Requests.Single(item => item.Kind == ClientModuleKind.Settings);
+        checks.That(request.Payload.Length == 48 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(24)) == 257 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(32)) == 157 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(36)) == 2 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(40)) == 4 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(44)) == 3,
+            "Directed fire must carry only the explicit experimental flag and validated FOV/bone/key/options in the v2 settings payload.");
+        var shadow = external.Pushed.Single();
+        shadow.Validate();
+        checks.That(!shadow.Silent.Enabled && !shadow.Silent.DrawFov && !shadow.Player.GodMode,
+            "The wrapped external backend must never receive enabled experimental Silent Aim or native-owned player flags.");
+        var status = await provider.GetStatusAsync();
+        var feature = status.FeatureStates.Single(item => item.Name == "silent");
+        checks.That(status.Capabilities.Contains("silent") && feature.State == "observed" &&
+            feature.Message.Contains("experimental", StringComparison.Ordinal) &&
+            feature.Message.Contains("Acerto não foi validado", StringComparison.Ordinal),
+            "A processed experimental setting must explicitly avoid claiming a hit or damage observation.");
+        pipe.Transform = (_, native) => native with { Error = 13, Message = "Experimental: consumo de munição não observado; disparo não confirmado." };
+        await EventuallyAsync(async () => (await provider.GetStatusAsync()).FeatureStates.Single(item => item.Name == "silent").State == "failed",
+            "The experimental dispatch failure did not reach its individual feature state.");
+        status = await provider.GetStatusAsync();
+        feature = status.FeatureStates.Single(item => item.Name == "silent");
+        checks.That(feature.ObservedUtc is null && feature.Message.Contains("não confirmado", StringComparison.Ordinal) &&
+            status.Ready && status.SessionActive && status.FeatureStates.Single(item => item.Name == "player.godMode").State == "observed",
+            "An isolated experimental failure must preserve other native effects without claiming the directed shot was observed.");
+        settings.Silent.Fov = 499;
+        using var diagnostic = JsonDocument.Parse(provider.CaptureDiagnostics());
+        checks.That(diagnostic.RootElement.GetProperty("Configuration").GetProperty("Silent").GetProperty("Fov").GetInt32() == 157,
+            "The experimental configuration must remain an owned snapshot after caller mutations.");
+        pipe.Capabilities = (ClientModuleCapabilities)255;
+        await EventuallyAsync(async () => !(await provider.GetStatusAsync()).Capabilities.Contains("silent"),
+            "Revoking experimental native support did not remove Silent Aim capability.");
+        status = await provider.GetStatusAsync();
+        checks.That(status.FeatureStates.Single(item => item.Name == "silent").State == "unsupported",
+            "A wrapped memory Silent Aim capability must not override missing native experimental support.");
+        await checks.ThrowsAsync<NotSupportedException>(() => provider.PushSettingsAsync(settings),
+            "Enabled experimental directed fire must be rejected when its native capability is missing.");
+        checks.That(pipe.Count(ClientModuleKind.Settings) == 1 && external.Pushed.Count == 1 && pipe.Count(ClientModuleKind.Action) == 0,
+            "Unsupported experimental settings must not trigger a native replay or a memory fallback.");
+        pipe.ThrowIfFaulted();
+    }
+
+    private static async Task VehicleCapabilitiesAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = true, ProcessId = 101 };
+        await using var pipe = new ModulePipe { Capabilities = (ClientModuleCapabilities)63 | ClientModuleCapabilities.LockVehicle };
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await ReadyAsync(provider);
+        // This regression reproduces a synchronous rejected operation followed
+        // by a pipe await that can resume on a different managed thread.
+        var sessionGate = typeof(ClientModuleSession).GetField("_gate", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(provider)!;
+        checks.That(!Monitor.IsEntered(sessionGate), "A ready provider must not leave its Monitor held by the awaiting caller.");
+        var status = await provider.GetStatusAsync();
+        checks.That(!Monitor.IsEntered(sessionGate), "A synchronous status result must release the provider Monitor before returning.");
+        checks.That(status.Capabilities.Contains("vehicle.lock") && !status.Capabilities.Contains("vehicle.unlock") &&
+            status.FeatureStates.Single(item => item.Name == "vehicle.lock").State == "ready" &&
+            status.FeatureStates.Single(item => item.Name == "vehicle.unlock").State == "unsupported",
+            "Vehicle capabilities must come only from the corresponding native bit, never a wrapped memory capability.");
+        checks.That(status.FeatureStates.Single(item => item.Name == "vehicle.lock").Message.Contains("framework", StringComparison.Ordinal),
+            "Door capability descriptions must distinguish native door state from server framework keys.");
+        await checks.ThrowsAsync<NotSupportedException>(() => provider.SetVehicleLockAsync(false),
+            "An unannounced unlock operation must be refused before writing the pipe.");
+        checks.That(!Monitor.IsEntered(sessionGate), "Rejecting an unsupported operation must release the Monitor before completing its task.");
+        checks.That(pipe.Count(ClientModuleKind.Action) == 0 && external.VehicleActions == 0,
+            "An unsupported native door operation must not fall back to the memory provider.");
+        await provider.SetVehicleLockAsync(true);
+        checks.That(pipe.Count(ClientModuleKind.Action) == 1,
+            "Rejecting unsupported unlock must not prevent an explicitly supported lock on the same ready session.");
+        pipe.Capabilities = (ClientModuleCapabilities)63;
+        await EventuallyAsync(async () => !(await provider.GetStatusAsync()).Capabilities.Contains("vehicle.lock"),
+            "Revoking the lock capability did not update the provider.");
+        await checks.ThrowsAsync<NotSupportedException>(() => provider.SetVehicleLockAsync(true),
+            "A revoked native lock capability must be checked again for each action.");
+        checks.That(!Monitor.IsEntered(sessionGate), "Rejecting a revoked capability must also release the provider Monitor.");
+        checks.That(pipe.Count(ClientModuleKind.Action) == 1 && external.VehicleActions == 0,
+            "Revoked vehicle operations must remain unsent and must not fall back to memory.");
+        pipe.ThrowIfFaulted();
+    }
+
+    private static async Task VehicleTimeoutNoReplayAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = false };
+        await using var pipe = new ModulePipe { AutoObserveActions = false };
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await ReadyAsync(provider);
+        await checks.ThrowsAsync<TimeoutException>(() => provider.SetVehicleLockAsync(true),
+            "Pending is only a receipt; a door action must time out without a matching native observation.");
+        checks.That(pipe.Count(ClientModuleKind.Action) == 1 && pipe.Count(ClientModuleKind.Settings) == 0,
+            "A timed-out door request must send exactly one action and no configuration changes.");
+        await EventuallyAsync(() => Task.FromResult(pipe.Connections >= 2), "The door timeout did not close the old lease.");
+        await ReadyAsync(provider);
+        pipe.AutoObserveActions = true;
+        await Task.Delay(260);
+        checks.That(pipe.Count(ClientModuleKind.Action) == 1 &&
+            !(await provider.GetEventsAsync(0)).Events.Any(item => item.Type == "observed"),
+            "A later fresh lease must not replay or report success for the timed-out door action.");
+        pipe.ThrowIfFaulted();
+    }
+
+    private static async Task VehicleTargetAndCancellationAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = false };
+        await using var pipe = new ModulePipe { AutoObserveActions = false };
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await ReadyAsync(provider);
+        long previousEpoch = provider.PlayerEpoch;
+        pipe.Ped++;
+        await EventuallyAsync(() => Task.FromResult(provider.PlayerEpoch != previousEpoch), "Replacing the ped did not invalidate its vehicle action target.");
+        await checks.ThrowsAsync<InvalidOperationException>(() => provider.SetVehicleLockAsync(true, previousEpoch),
+            "A door action confirmed for another ped must be rejected before transmission.");
+        using var beforeSend = new CancellationTokenSource(); beforeSend.Cancel();
+        await checks.ThrowsAsync<OperationCanceledException>(() => provider.SetVehicleLockAsync(false, beforeSend.Token),
+            "A canceled door request must remain unsent.");
+        checks.That(pipe.Count(ClientModuleKind.Action) == 0 && pipe.Count(ClientModuleKind.Settings) == 0,
+            "Stale and pre-canceled door actions must have no native side effects.");
+
+        using var afterSend = new CancellationTokenSource();
+        Task pending = provider.SetVehicleLockAsync(false, afterSend.Token);
+        await EventuallyAsync(() => Task.FromResult(pipe.Count(ClientModuleKind.Action) == 1), "The cancelable unlock was not transmitted.");
+        checks.That(!pending.IsCompleted, "An acknowledged but unobserved unlock must remain pending.");
+        afterSend.Cancel();
+        await checks.ThrowsAsync<OperationCanceledException>(() => pending,
+            "Caller cancellation must abort an unobserved vehicle operation.");
+        await EventuallyAsync(() => Task.FromResult(pipe.Connections >= 2), "Canceling a transmitted door action did not replace its lease.");
+        await ReadyAsync(provider);
+
+        Task replacedPed = provider.SetVehicleLockAsync(true);
+        await EventuallyAsync(() => Task.FromResult(pipe.Count(ClientModuleKind.Action) == 2), "The second vehicle action was not sent.");
+        pipe.Ped++;
+        await checks.ThrowsAnyAsync(() => replacedPed,
+            "Changing the ped while a door action is pending must invalidate its eventual result.");
+        await EventuallyAsync(() => Task.FromResult(pipe.Connections >= 3), "The changed-ped vehicle action did not close its lease.");
+        await ReadyAsync(provider);
+        pipe.AutoObserveActions = true;
+        await Task.Delay(260);
+        checks.That(pipe.Count(ClientModuleKind.Action) == 2 && pipe.Count(ClientModuleKind.Settings) == 0 &&
+            !(await provider.GetEventsAsync(0)).Events.Any(item => item.Type == "observed"),
+            "Canceled and changed-ped vehicle requests must never be replayed or reported as observed after reconnecting.");
+        pipe.ThrowIfFaulted();
+    }
+
     private static async Task MalformedPollRecoveryAsync(Checks checks)
     {
         var external = new MemoryProvider { Ready = false };
@@ -436,6 +633,7 @@ internal static class ClientModuleSessionChecks
         public int AppliedOffset { get; set; }
         public int Revives { get; private set; }
         public int Suicides { get; private set; }
+        public int VehicleActions { get; private set; }
         public int Disconnects => Volatile.Read(ref _disconnects);
         public int Disposals => Volatile.Read(ref _disposals);
         public List<MenuSettings> Pushed { get { lock (_gate) return _pushed.Select(ExternalStateSerialization.Clone).ToList(); } }
@@ -450,7 +648,7 @@ internal static class ClientModuleSessionChecks
             {
                 Ready = Ready, PlayerOnline = Ready, PlayerId = Ready ? ProcessId : null,
                 DesiredRevision = revision, AppliedRevision = Math.Max(0, revision + AppliedOffset),
-                Capabilities = Ready ? ["aim.enabled", "esp.enabled", "weapons.noRecoil", "player.godMode", "player.suicide"] : [],
+                Capabilities = Ready ? ["aim.enabled", "esp.enabled", "weapons.noRecoil", "player.godMode", "player.suicide", "vehicle.lock", "vehicle.unlock", "silent"] : [],
                 FeatureStates = [new() { Name = "player.godMode", State = "observed", Message = "memory sentinel" }],
                 Message = "memory provider mock"
             });
@@ -470,6 +668,8 @@ internal static class ClientModuleSessionChecks
         public Task ReviveAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) => ReviveAsync(cancellationToken);
         public Task SuicideAsync(CancellationToken cancellationToken = default) { Suicides++; return Task.CompletedTask; }
         public Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) => SuicideAsync(cancellationToken);
+        public Task SetVehicleLockAsync(bool locked, CancellationToken cancellationToken = default) { VehicleActions++; return Task.CompletedTask; }
+        public Task SetVehicleLockAsync(bool locked, long expectedPlayerEpoch, CancellationToken cancellationToken = default) => SetVehicleLockAsync(locked, cancellationToken);
         public Task DisconnectAsync(CancellationToken cancellationToken = default)
         { Interlocked.Increment(ref _disconnects); Ready = false; return Task.CompletedTask; }
         public string CaptureDiagnostics() => "{\"MemoryProvider\":true}";
@@ -487,7 +687,11 @@ internal static class ClientModuleSessionChecks
         private readonly ConcurrentQueue<Exception> _faults = new();
         private uint _ped = 0xBEEF;
         private int _connections, _closed, _autoObserve = 1, _autoApply = 1, _settingsActive = 1, _nativeReady = 1;
+        private uint _capabilities = 511;
         private long _frozenTick;
+        public bool Alive { get; init; } = true;
+        public ClientModuleCapabilities Capabilities { get => (ClientModuleCapabilities)Volatile.Read(ref _capabilities);
+            set => Volatile.Write(ref _capabilities, (uint)value); }
         public uint Ped { get => Volatile.Read(ref _ped); set => Volatile.Write(ref _ped, value); }
         public bool StaleFrames { get => Interlocked.Read(ref _frozenTick) != 0;
             set => Interlocked.Exchange(ref _frozenTick, value ? Environment.TickCount64 : 0); }
@@ -524,7 +728,7 @@ internal static class ClientModuleSessionChecks
                     ulong desired = 0, applied = 0, nonce = 0;
                     ClientModuleAction action = ClientModuleAction.None;
                     ClientModuleActionResult result = ClientModuleActionResult.None;
-                    bool alive = true;
+                    bool alive = Alive;
                     while (!cancellationToken.IsCancellationRequested)
                     {
                         byte[] headerBytes = new byte[ClientModuleProtocol.HeaderLength];
@@ -551,11 +755,15 @@ internal static class ClientModuleSessionChecks
                             result = ClientModuleActionResult.Pending;
                         }
                         if (result == ClientModuleActionResult.Pending && AutoObserveActions)
-                        { result = ClientModuleActionResult.Observed; alive = action == ClientModuleAction.ReviveNative; }
+                        {
+                            result = ClientModuleActionResult.Observed;
+                            if (action == ClientModuleAction.ReviveNative) alive = true;
+                            else if (action == ClientModuleAction.Suicide) alive = false;
+                        }
                         long tick = Interlocked.Read(ref _frozenTick);
                         ulong sampled = (ulong)(tick != 0 ? tick : Environment.TickCount64);
                         var status = new ClientModuleStatus(sampled, desired, SettingsActive ? applied : 0, nonce,
-                            (ClientModuleCapabilities)63,
+                            Capabilities,
                             (NativeReady ? ClientModuleStateFlags.Ready : 0) | (alive ? ClientModuleStateFlags.PedAlive : 0) |
                             (applied > 0 && SettingsActive ? ClientModuleStateFlags.SettingsActive : 0),
                             action, result, Ped, 3258, 0, "test native frame");

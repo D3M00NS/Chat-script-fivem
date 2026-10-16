@@ -205,6 +205,17 @@ internal sealed class LocalGameSession : ILocalGameSession
     public Task ReviveAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) =>
         ReviveAsync(cancellationToken);
 
+    public Task SetVehicleLockAsync(bool locked, CancellationToken cancellationToken = default) =>
+        SetVehicleLockAsync(locked, PlayerEpoch, cancellationToken);
+
+    public Task SetVehicleLockAsync(bool locked, long expectedPlayerEpoch, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed), this);
+        return Task.FromException(new NotSupportedException(
+            "Trancar ou destrancar veículo exige a operação nativa confirmada pelo módulo local; o backend externo não altera portas ou chaves."));
+    }
+
     public Task SuicideAsync(CancellationToken cancellationToken = default) => SuicideAsync(PlayerEpoch, cancellationToken);
 
     public Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default)

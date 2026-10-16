@@ -26,6 +26,10 @@ constexpr std::uint64_t SetTotalAmmo = 0x14E56BC5B5DB6A19ULL, SetClipAmmo = 0xDC
 constexpr std::uint64_t Heading = 0xE83D4F9BA2A38914ULL, Resurrect = 0xEA23C49EAA83ACFBULL;
 constexpr std::uint64_t MaximumHealth = 0x15D757606D170C3CULL, SetHealth = 0x6B76DC1F3AE6E6A3ULL;
 constexpr std::uint64_t ClearBlood = 0x8FE22675A5A45817ULL;
+constexpr std::uint64_t VehicleIn = 0x9A9112A0FE9A4713ULL, ClosestVehicle = 0xF73EB622C4F1689BULL;
+constexpr std::uint64_t IsVehicle = 0x6AC7003FA6E5575EULL, RequestControl = 0xB69317BF5E782347ULL;
+constexpr std::uint64_t SetDoorLock = 0xB664292EAECF7FA6ULL, DoorLock = 0x25BC98A59C2EA962ULL;
+constexpr float VehicleRadius = 8.0f;
 constexpr std::uint32_t Unarmed = 0xA2719263u;
 bool FinitePosition(float x, float y, float z) {
     return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
@@ -77,6 +81,91 @@ bool Engine::SameLocalPed(std::uint32_t ped) {
     std::uint32_t current = 0, model = 0;
     return Integer(PlayerPed, {}, current) && current == ped && ValidatePed(ped, &model) && model == model_;
 }
+bool Engine::ValidateVehicle(std::uint32_t vehicle, std::uint32_t* model) {
+    bool exists = false, isVehicle = false;
+    std::uint32_t value = 0;
+    if (!vehicle || !Bool(Exists, {vehicle}, exists) || !exists ||
+        !Bool(IsVehicle, {vehicle}, isVehicle) || !isVehicle || !Integer(Model, {vehicle}, value) || !value)
+        return false;
+    if (model) *model = value;
+    return true;
+}
+bool Engine::CaptureVehicle() {
+    std::uint32_t vehicle = 0;
+    if (!Integer(VehicleIn, {pendingPed_, NativeArg(false)}, vehicle)) return false;
+    pendingVehicleOccupied_ = vehicle != 0;
+    if (!vehicle) {
+        Vec position{};
+        if (!Vector(Coordinates, {pendingPed_, NativeArg(false)}, position) ||
+            // Documented road-vehicle query; the independent range/type check
+            // below also rejects an invalid or out-of-range native result.
+            !Integer(ClosestVehicle, {NativeArg(position.x), NativeArg(position.y), NativeArg(position.z),
+                NativeArg(VehicleRadius), 0u, 70u}, vehicle)) return false;
+    }
+    if (!ValidateVehicle(vehicle, &pendingVehicleModel_)) return false;
+    pendingVehicle_ = vehicle;
+    return SameVehicleTarget();
+}
+bool Engine::SameVehicleTarget() {
+    std::uint32_t model = 0, currentVehicle = 0;
+    if (!SameLocalPed(pendingPed_) || !ValidateVehicle(pendingVehicle_, &model) || model != pendingVehicleModel_ ||
+        !Integer(VehicleIn, {pendingPed_, NativeArg(false)}, currentVehicle)) return false;
+    if (pendingVehicleOccupied_) return currentVehicle == pendingVehicle_;
+    // A pending request keeps its captured target; it never switches to a new
+    // closest car, and entering a different car cancels it.
+    if (currentVehicle && currentVehicle != pendingVehicle_) return false;
+    Vec pedPosition{}, vehiclePosition{};
+    if (!Vector(Coordinates, {pendingPed_, NativeArg(false)}, pedPosition) ||
+        !Vector(Coordinates, {pendingVehicle_, NativeArg(false)}, vehiclePosition)) return false;
+    const double dx = static_cast<double>(pedPosition.x) - vehiclePosition.x;
+    const double dy = static_cast<double>(pedPosition.y) - vehiclePosition.y;
+    const double dz = static_cast<double>(pedPosition.z) - vehiclePosition.z;
+    return dx * dx + dy * dy + dz * dz <= static_cast<double>(VehicleRadius) * VehicleRadius;
+}
+void Engine::AdvanceVehicleAction(std::uint64_t nowMs) {
+    if (pendingVehicleAttemptMs_ == nowMs) return;
+    pendingVehicleAttemptMs_ = nowMs;
+    if (nowMs < pendingStarted_ || nowMs - pendingStarted_ >= 2000) {
+        EndAction(Failed, "Vehicle control or door-lock readback was not confirmed within two seconds."); return;
+    }
+    if (!SameVehicleTarget()) {
+        EndAction(Failed, "The captured vehicle, local ped or eight-metre range changed."); return;
+    }
+    bool controlled = false;
+    if (!Bool(NetworkControl, {pendingVehicle_}, controlled)) {
+        EndAction(Failed, "The vehicle network-control state is unavailable."); return;
+    }
+    if (!controlled) {
+        if (pendingVehicleWritten_) {
+            EndAction(Failed, "Vehicle network control was lost before confirmation."); return;
+        }
+        bool requested = false;
+        // This is an ordinary bounded CFX/GTA control request. Its return
+        // value is not authority: only the observable control getter permits a write.
+        if (!Bool(RequestControl, {pendingVehicle_}, requested) ||
+            !Bool(NetworkControl, {pendingVehicle_}, controlled)) {
+            EndAction(Failed, "The official vehicle network-control request was unavailable."); return;
+        }
+        if (!controlled) return;
+    }
+    if (!SameVehicleTarget()) {
+        EndAction(Failed, "The vehicle target changed while requesting network control."); return;
+    }
+    const std::uint32_t target = pendingAction_ == LockVehicle ? 2u : 1u;
+    if (!pendingVehicleWritten_) {
+        pendingVehicleWritten_ = true; // Never repeat a setter for this action nonce.
+        if (!Call(SetDoorLock, {pendingVehicle_, target})) {
+            EndAction(Failed, "The native vehicle door-lock write was unavailable."); return;
+        }
+    }
+    std::uint32_t observed = 0;
+    if (!SameVehicleTarget() || !Integer(DoorLock, {pendingVehicle_}, observed)) {
+        EndAction(Failed, "The captured vehicle door-lock state could not be read back."); return;
+    }
+    if (observed == target)
+        EndAction(Observed, target == 2u ? "Native vehicle door-lock state 2 observed; framework keys are unchanged."
+            : "Native vehicle door-lock state 1 observed; framework keys are unchanged.");
+}
 // IS_PED_DEAD_OR_DYING with melee-death extension disabled: a melee takedown
 // alone must not be acknowledged as this module's observed suicide.
 bool Engine::Dead(bool& dead) { return Bool(PedDead, {ped_, NativeArg(false)}, dead); }
@@ -100,6 +189,9 @@ std::uint32_t Engine::AvailableCapabilities() const {
     if (available({SelectedWeapon, TotalAmmo, ClipAmmo, SetTotalAmmo, SetClipAmmo})) result |= CapabilityFreezeAmmo;
     if (available({Coordinates, Heading, Resurrect, MaximumHealth, SetHealth, ClearBlood})) result |= CapabilityRevive;
     if (available({SetHealth})) result |= CapabilitySuicide;
+    if (directedFire_.Available()) result |= CapabilityDirectedFireExperimental;
+    if (available({VehicleIn, ClosestVehicle, IsVehicle, Coordinates, NetworkControl, RequestControl, SetDoorLock, DoorLock}))
+        result |= CapabilityLockVehicle | CapabilityUnlockVehicle;
     return result;
 }
 
@@ -144,6 +236,7 @@ bool Engine::RestoreFlight() {
     return collision && frozen;
 }
 bool Engine::ReleaseEffects() {
+    directedFire_.Reset();
     // Do not short circuit: every owned property gets an independent cleanup attempt.
     const bool flight = RestoreFlight();
     const bool god = RestoreProperty(god_, Damageable, SetDamageable, false, false);
@@ -254,11 +347,14 @@ bool Engine::ApplyAmmo() {
 void Engine::EndAction(std::uint32_t result, const char* message) {
     status_.actionResult = result;
     pendingAction_ = NoAction; pendingPed_ = 0;
+    pendingVehicle_ = pendingVehicleModel_ = 0; pendingVehicleAttemptMs_ = 0;
+    pendingVehicleOccupied_ = pendingVehicleWritten_ = false;
     Message(result == Failed ? ActionFailure : NoError, message);
 }
 void Engine::ObserveAction(std::uint64_t nowMs, bool dead) {
     if (pendingAction_ == NoAction) return;
     if (pendingPed_ != ped_ || !SameLocalPed(pendingPed_)) { EndAction(Failed, "The local ped changed before the action was confirmed."); return; }
+    if (pendingAction_ == LockVehicle || pendingAction_ == UnlockVehicle) { AdvanceVehicleAction(nowMs); return; }
     if ((pendingAction_ == Suicide && dead) || (pendingAction_ == Revive && !dead)) {
         EndAction(Observed, pendingAction_ == Suicide ? "Native death observed on the requested local ped."
             : "Native resurrection observed; framework medical state is not changed.");
@@ -270,15 +366,18 @@ void Engine::BeginAction(const ControlSnapshot& input, std::uint64_t nowMs, bool
     if (!input.action || !input.actionNonce || input.actionNonce <= lastActionNonce_ || pendingAction_) return;
     lastActionNonce_ = input.actionNonce;
     status_.actionNonce = input.actionNonce; status_.action = input.action; status_.actionResult = Pending;
-    const auto capability = input.action == Revive ? CapabilityRevive : CapabilitySuicide;
-    if ((input.action != Revive && input.action != Suicide) || !input.expectedPed || input.expectedPed != ped_ || !SameLocalPed(ped_)) {
+    const auto capability = input.action == Revive ? CapabilityRevive : input.action == Suicide ? CapabilitySuicide :
+        input.action == LockVehicle ? CapabilityLockVehicle : input.action == UnlockVehicle ? CapabilityUnlockVehicle : 0u;
+    if (!capability || !input.expectedPed || input.expectedPed != ped_ || !SameLocalPed(ped_)) {
         EndAction(Failed, "The action did not match the current local ped."); return;
     }
     if (!(status_.capabilities & capability)) {
         EndAction(Failed, "A required native handler for this action is unavailable."); return;
     }
     pendingAction_ = input.action; pendingPed_ = ped_; pendingStarted_ = nowMs;
-    if (input.action == Suicide) {
+    if (input.action == LockVehicle || input.action == UnlockVehicle) {
+        if (!CaptureVehicle()) EndAction(Failed, "No stable current vehicle or supported nearby vehicle within eight metres.");
+    } else if (input.action == Suicide) {
         suppressedFlags_ |= GodMode | Noclip;
         const bool flight = RestoreFlight();
         const bool god = RestoreProperty(god_, Damageable, SetDamageable, false, false);
@@ -306,7 +405,10 @@ void Engine::NewEpoch(std::uint64_t epoch) {
     ReleaseEffects();
     epoch_ = epoch; hasEpoch_ = true; revoked_ = false; timerSeen_ = false;
     settings_ = {}; hasSettings_ = false; minimumRevision_ = failedRevision_ = 0;
+    directedFailedRevision_ = 0; directedFailure_[0] = 0;
     lastActionNonce_ = 0; pendingAction_ = NoAction; pendingPed_ = ped_ = model_ = suppressedFlags_ = unavailableFlags_ = 0;
+    pendingVehicle_ = pendingVehicleModel_ = 0; pendingVehicleAttemptMs_ = 0;
+    pendingVehicleOccupied_ = pendingVehicleWritten_ = false;
     status_.action = NoAction; status_.actionNonce = 0; status_.actionResult = NoResult;
 }
 
@@ -379,11 +481,12 @@ void Engine::Step(const ControlSnapshot& input, std::uint64_t nowMs) {
     }
 
     if (input.settings.revision > settings_.revision && input.settings.revision > minimumRevision_) {
-        if ((input.settings.flags & ~KnownSettingFlags) || input.settings.speed < 1 || input.settings.speed > 50) {
+        if (!SettingsInRange(input.settings)) {
             ReleaseEffects(); failedRevision_ = input.settings.revision;
             Block(EffectFailure, "Settings contain an unsupported flag or invalid speed."); return;
         }
         settings_ = input.settings;
+        directedFailedRevision_ = 0; directedFailure_[0] = 0;
         // A stale UI snapshot must not re-enable protection after suicide.
         // Each suppressed toggle must first be explicitly observed off.
         suppressedFlags_ &= settings_.flags;
@@ -404,12 +507,33 @@ void Engine::Step(const ControlSnapshot& input, std::uint64_t nowMs) {
         if (status_.capabilities & CapabilityNoclip) availableFlags |= Noclip;
         if (status_.capabilities & CapabilityInvisible) availableFlags |= Invisible;
         if (status_.capabilities & CapabilityFreezeAmmo) availableFlags |= FreezeAmmo;
+        if (status_.capabilities & CapabilityDirectedFireExperimental) availableFlags |= DirectedFireExperimental;
         unavailableFlags_ = settings_.flags & ~availableFlags;
         bool waitingFlight = false;
-        if (!ApplyGod() || !ApplyVisibility() || !ApplyFlight(!dead, input.gameFocused, waitingFlight) || (!dead && !ApplyAmmo())) {
+        if (!ApplyGod() || !ApplyVisibility() || !ApplyFlight(!dead, input.gameFocused, waitingFlight)) {
             const bool restored = ReleaseEffects(); failedRevision_ = settings_.revision;
             Block(EffectFailure, restored ? "A native effect was not observed; owned effects were released."
                 : "A native effect was not observed; property restoration is still unconfirmed."); return;
+        }
+        DirectedFireSettings directed{};
+        directed.enabled = (settings_.flags & ~unavailableFlags_ & DirectedFireExperimental) &&
+            directedFailedRevision_ != settings_.revision && pendingAction_ == NoAction;
+        directed.onlyPlayers = (settings_.silentOptions & 1u) != 0;
+        directed.onlyVisible = (settings_.silentOptions & 2u) != 0;
+        directed.fov = settings_.silentFov; directed.bone = settings_.silentBone;
+        directed.activation = settings_.silentActivation;
+        char directedMessage[160]{};
+        if (!directedFire_.Step(ped_, !dead, input.gameFocused, directed, nowMs, directedMessage)) {
+            // A failed experiment must not release unrelated player effects or
+            // keep suppressing normal fire. Only an explicit newer revision retries.
+            directedFailedRevision_ = settings_.revision;
+            std::snprintf(directedFailure_, sizeof(directedFailure_), "%s", directedMessage);
+            directedFire_.Reset();
+        }
+        if (!dead && !directedFire_.PendingConsumption() && !ApplyAmmo()) {
+            const bool restored = ReleaseEffects(); failedRevision_ = settings_.revision;
+            Block(EffectFailure, restored ? "Ammo state was not observed; owned effects released."
+                : "Ammo state failed; property restoration is still unconfirmed."); return;
         }
         if (unavailableFlags_) {
             Message(NoError, "A requested feature lacks native handlers; supported features remain available.");
@@ -420,6 +544,10 @@ void Engine::Step(const ControlSnapshot& input, std::uint64_t nowMs) {
                 Message(NoError, suppressedFlags_ ? "Native settings active; suicide keeps owned GodMode and noclip disabled."
                     : "Native settings observed on the validated local ped.");
         } else Message(NoError, "Noclip waits for a live on-foot ped with network control and no attachment.");
+        if ((settings_.flags & DirectedFireExperimental) && pendingAction_ == NoAction) {
+            if (directedFailedRevision_ == settings_.revision) Message(EffectFailure, directedFailure_);
+            else if (directed.enabled) Message(NoError, directedMessage);
+        }
     }
     // Calls can change death state immediately; observation is still required for ACK.
     ObserveAction(nowMs, dead);

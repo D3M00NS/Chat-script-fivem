@@ -27,7 +27,7 @@ internal static class ClientModuleProtocolChecks
             ClientModuleProtocol.StatusPayloadLength == 240, "Managed protocol sizes must match the packed native ABI.");
         foreach (var (kind, length) in new[]
         {
-            (ClientModuleKind.Hello, 16), (ClientModuleKind.Settings, 32), (ClientModuleKind.Action, 32),
+            (ClientModuleKind.Hello, 16), (ClientModuleKind.Settings, 48), (ClientModuleKind.Action, 32),
             (ClientModuleKind.Status, 240), (ClientModuleKind.Disconnect, 16), (ClientModuleKind.Poll, 16)
         })
         {
@@ -68,10 +68,14 @@ internal static class ClientModuleProtocolChecks
         byte[] settings = ClientModuleProtocol.SettingsPayload(token, 0x0102030405060708,
             ClientModuleSettingsFlags.God | ClientModuleSettingsFlags.Noclip | ClientModuleSettingsFlags.Invisible |
             ClientModuleSettingsFlags.FreezeAmmo, 50);
-        checks.That(settings.Length == 32 && settings.AsSpan(0, 16).SequenceEqual(token) &&
+        checks.That(settings.Length == 48 && settings.AsSpan(0, 16).SequenceEqual(token) &&
             BinaryPrimitives.ReadUInt64LittleEndian(settings.AsSpan(16)) == 0x0102030405060708 &&
             BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(24)) == 15 &&
-            BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(28)) == 50,
+            BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(28)) == 50 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(32)) == 100 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(36)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(40)) == 0 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(settings.AsSpan(44)) == 3,
             "Settings must preserve the revision, known flags and speed in the native packed layout.");
         checks.Reject(() => ClientModuleProtocol.SettingsPayload(token, 0, ClientModuleSettingsFlags.None, 5),
             "A settings request must have a nonzero revision.");
@@ -96,8 +100,31 @@ internal static class ClientModuleProtocolChecks
             "Action nonces must not overflow the client's signed action counter.");
         checks.Reject(() => ClientModuleProtocol.ActionPayload(token, 1, ClientModuleAction.Suicide, 0),
             "An action without its expected ped must never be sent.");
-        foreach (var invalid in new[] { ClientModuleAction.None, (ClientModuleAction)3, (ClientModuleAction)uint.MaxValue })
+        foreach (var invalid in new[] { ClientModuleAction.None, (ClientModuleAction)5, (ClientModuleAction)uint.MaxValue })
             checks.Reject(() => ClientModuleProtocol.ActionPayload(token, 1, invalid, 7), "Only supported one-shot actions may be encoded.");
+        foreach (var vehicle in new[] { ClientModuleAction.LockVehicle, ClientModuleAction.UnlockVehicle })
+        {
+            byte[] encoded = ClientModuleProtocol.ActionPayload(token, 2, vehicle, 7);
+            checks.That(BinaryPrimitives.ReadUInt32LittleEndian(encoded.AsSpan(24)) == (uint)vehicle &&
+                BinaryPrimitives.ReadUInt32LittleEndian(encoded.AsSpan(28)) == 7,
+                "Vehicle actions retain their expected local ped and explicit action id.");
+        }
+        var experimental = new AimSettings { Enabled = true, Fov = 222, TargetBone = "Chest", ActivationKey = "Ctrl", OnlyVisible = false };
+        byte[] directed = ClientModuleProtocol.SettingsPayload(token, 3, ClientModuleSettingsFlags.DirectedFireExperimental, 5, experimental);
+        checks.That(BinaryPrimitives.ReadUInt32LittleEndian(directed.AsSpan(24)) == 256 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(directed.AsSpan(32)) == 222 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(directed.AsSpan(36)) == 2 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(directed.AsSpan(40)) == 4 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(directed.AsSpan(44)) == 1,
+            "Experimental fire uses bounded primitive fields, never native handles or addresses from the UI.");
+        foreach (var invalid in new[] { new AimSettings { OnlyPlayers = false }, new AimSettings { DrawFov = true }, new AimSettings { Smooth = 2 } })
+            checks.Reject(() => ClientModuleProtocol.SettingsPayload(token, 1, ClientModuleSettingsFlags.DirectedFireExperimental, 5, invalid),
+                "Unsupported experimental features cannot silently change the requested behavior.");
+        var experimentalMenu = new MenuSettings();
+        experimentalMenu.Silent.Enabled = true;
+        checks.Reject(() => experimentalMenu.Validate(), "External and server integrations continue rejecting experimental fire.");
+        experimentalMenu.Validate(allowExperimentalSilent: true);
+        checks.That(experimentalMenu.Silent.Enabled, "Only the explicit local module validation accepts experimental fire.");
 
         byte[] payload = StatusPayload(token);
         var status = ClientModuleProtocol.DecodeStatus(payload, token);
@@ -358,7 +385,7 @@ internal static class ClientModuleProtocolChecks
     {
         byte[] header = new byte[16];
         await stream.ReadExactlyAsync(header, cancellationToken);
-        int length = expectedKind is ClientModuleKind.Settings or ClientModuleKind.Action ? 32 : 16;
+        int length = expectedKind == ClientModuleKind.Settings ? 48 : expectedKind == ClientModuleKind.Action ? 32 : 16;
         if (!header.SequenceEqual(Header(expectedKind, length)))
             throw new InvalidOperationException("The loopback module received an invalid request header.");
         byte[] payload = new byte[length];
@@ -387,7 +414,7 @@ internal static class ClientModuleProtocolChecks
     {
         byte[] bytes = new byte[16];
         BinaryPrimitives.WriteUInt32LittleEndian(bytes, 0x4E4F595A);
-        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4), 2);
         BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(6), (ushort)kind);
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8), checked((uint)payloadLength));
         return bytes;

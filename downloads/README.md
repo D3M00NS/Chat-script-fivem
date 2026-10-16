@@ -1,3 +1,21 @@
+# Zyon 3.3.0 — módulo local para teste no Windows
+
+[Pacote completo com runtime](ZyonMenu-v3.3.0-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.0-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.0-packages.json)
+
+Feche o FiveM e o menu anterior. Extraia o ZIP em uma pasta nova, abra `ZyonMenu.exe` e use **Conexão → Preparar módulo local**, selecionando sua pasta `FiveM.app`. Faça isso também se já instalou a 3.2.0: aplicativo e ASI desta versão usam o novo protocolo 2. Depois abra o FiveM novamente.
+
+O modo **CLIENTE LOCAL** não pede cargo de administrador no servidor. O módulo depende de o servidor já permitir plugins/ScriptHook e pure level abaixo de 2. Estado **desconectado** pede diagnóstico do carregamento e da conexão, não a permissão ACE `zyon.modmenu` da integração administrativa antiga.
+
+Esta versão preserva GodMode, noclip/voar, invisibilidade, Freeze Ammo, suicídio e revive nativo; acrescenta **Bloquear carro / Desbloquear carro** para o veículo ocupado ou o mais próximo em até 8 m, sujeito ao controle de rede e à confirmação das portas. Não concede chaves de ESX/QBCore.
+
+O **Silent Aim é experimental**: tenta `SET_PED_SHOOTS_AT_COORD`, sem mover a câmera nem criar um projétil manual. Exige soltar o tiro após ativar e faz uma tentativa por novo pressionamento, com jogador válido no FOV. Enquanto ativo, suprime o tiro normal mesmo sem alvo; pode impedir tiros e não garante redirecionamento ou acerto. O diagnóstico pode confirmar consumo de munição, não um hit.
+
+**Windows/FiveM real ainda não foi validado.** Voz recebida, ADMs/nomes, visibilidade do ESP externo e recuperação médica ESX/QBCore continuam pendentes. Consulte [instruções e limites](../zyon-v3/README.md), [protocolo e teste](../zyon-v3/docs/client-module-3.3.0.md) e [validação](../zyon-v3/docs/VALIDACAO.md). Use **Salvar diagnóstico** após testar uma função por vez.
+
+## Histórico
+
+Os pacotes abaixo pertencem a versões anteriores.
+
 # Zyon 3.2.0 — módulo local para teste no Windows
 
 [Pacote completo com runtime](ZyonMenu-v3.2.0-completo.zip) · [Pacote compacto](ZyonMenu-v3.2.0-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.2.0-packages.json)
