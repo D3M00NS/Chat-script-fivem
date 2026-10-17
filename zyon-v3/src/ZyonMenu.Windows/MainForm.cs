@@ -25,7 +25,7 @@ internal sealed class MainForm : Form
     private readonly Label _serverLabel = Theme.Label("", true);
     private readonly Label _connectionDetails = Theme.Label("Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
     private readonly Label _readinessDetails = Theme.Label("Verificando a conexão do cliente…", true);
-    private readonly Button _readinessPrimary = Theme.Button("Preparar módulo local", true);
+    private readonly Button _readinessPrimary = Theme.Button("Configurar integração", true);
     private readonly Button _readinessRefresh = Theme.Button("Verificar novamente");
     private readonly TextBox _process = Theme.TextBox();
     private readonly TextBox _eventLog = new();
@@ -86,7 +86,7 @@ internal sealed class MainForm : Form
         _client = client ?? new LocalGameSession();
         Text = UsesClientModule ? AppIdentity.ClientModuleTitle : AppIdentity.StandaloneTitle;
         if (UsesClientModule)
-            _connectionDetails.Text = "Prepare o módulo local e mantenha o FiveM aberto. Nenhuma instalação no servidor é necessária.";
+            _connectionDetails.Text = "Abra o FiveM. A conexão e a seleção das funções disponíveis são automáticas.";
         Size = new Size(1100, 790);
         MinimumSize = new Size(950, 660);
         StartPosition = FormStartPosition.CenterScreen;
@@ -192,10 +192,10 @@ internal sealed class MainForm : Form
 
         var main = new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background };
         var header = new Panel { Dock = DockStyle.Top, Height = 190, Padding = new Padding(26, 15, 26, 8), BackColor = Theme.Background };
-        var title = Theme.Label($"ZYON {AppIdentity.DisplayVersion}  /  {(UsesClientModule ? "CLIENTE LOCAL" : "STANDALONE")}");
+        var title = Theme.Label($"ZYON {AppIdentity.DisplayVersion}  /  FiveM");
         title.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
         title.Location = new Point(26, 16);
-        var subtitle = Theme.Label(UsesClientModule ? "FiveM · módulo local e processo b3258" : "FiveM b3258 · processo local · configuração independente", true);
+        var subtitle = Theme.Label("FiveM b3258 · detecção automática", true);
         subtitle.Location = new Point(27, 45);
         _connectionLabel.AutoSize = false;
         _connectionLabel.Size = new Size(290, 24);
@@ -346,7 +346,7 @@ internal sealed class MainForm : Form
         page.Controls.Add(card);
         var note = Card("Estado do personagem", 408, height);
         AddNote(note, UsesClientModule
-            ? "As opções dependem do módulo local conectado ao FiveM. Consulte Situação das funções para ver as confirmações do cliente.\n\nReviver nativo observa o personagem vivo no jogo; não remove o estado de coma ou hospital do ESX/QBCore.\n\nSuicídio define a vida como zero após confirmação e desativa GodMode. Confirme a morte na cidade."
+            ? "GodMode e suicídio usam automaticamente o caminho confirmado para o personagem. Consulte Situação das funções para ver a disponibilidade.\n\nReviver nativo observa o personagem vivo no jogo; não remove o estado de coma ou hospital do ESX/QBCore.\n\nSuicídio define a vida como zero após confirmação e desativa GodMode. Confirme a morte na cidade."
             : "GodMode pode ser preparado localmente e depende de um personagem validado. Consulte Situação das funções para distinguir configuração recebida de valores confirmados em leitura.\n\nSuicídio define a vida local como zero após confirmação e desativa GodMode. Confirme a morte dentro da cidade. Reviver e noclip permanecem indisponíveis neste perfil externo.", 62, 360);
         page.Controls.Add(note);
     }
@@ -408,7 +408,7 @@ internal sealed class MainForm : Form
         var note = Card("Como usar", 408, 302);
         AddNote(note, UsesClientModule
             ? "Entre no carro ou fique a até 8 metros dele. Se estiver a pé, a ação seleciona o veículo mais próximo.\n\nO módulo precisa estar conectado e ter controle do veículo. O resultado é confirmado pela leitura nativa das portas.\n\nScripts de chaves ou garagem podem mudar o estado novamente. A ação não concede chaves de ESX/QBCore e não verifica cargo de administrador."
-            : "Abra o menu em CLIENTE LOCAL e prepare o módulo na aba Conexão. As ações das portas não estão disponíveis no modo externo.", 62, 360);
+            : "Abra o menu normalmente e configure a integração na aba Conexão. As ações das portas não estão disponíveis no modo externo.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -437,7 +437,7 @@ internal sealed class MainForm : Form
         var page = NewPage("Connection");
         var featureCard = BuildFeatureStatusCard();
         page.Controls.Add(featureCard);
-        var card = Card(UsesClientModule ? "Módulo do cliente e processo local" : "Detecção do processo local", 834, 315);
+        var card = Card(UsesClientModule ? "Conexão automática" : "Detecção do processo local", 834, 315);
         var processLabel = Theme.Label("Processo detectado");
         processLabel.Location = new Point(20, 60);
         _process.Dock = DockStyle.None;
@@ -447,7 +447,7 @@ internal sealed class MainForm : Form
         _process.Text = "Aguardando FiveM_b3258_GTAProcess.exe…";
         _process.ReadOnly = true;
         _process.AccessibleName = "Processo local detectado automaticamente";
-        var note = Theme.Label(UsesClientModule ? "Abra o FiveM com o módulo local preparado. As funções nativas aguardam a conexão do cliente." : "Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
+        var note = Theme.Label(UsesClientModule ? "Abra o FiveM. Cada função fica disponível quando seu caminho de execução é confirmado." : "Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
         note.Location = new Point(20, 137);
         note.AutoSize = false;
         note.Size = new Size(790, 42);
@@ -461,7 +461,7 @@ internal sealed class MainForm : Form
         card.Controls.AddRange(new Control[] { processLabel, _process, note, _connect, _disconnect, _connectionDetails });
         if (UsesClientModule)
         {
-            var setupModule = Theme.Button("Preparar módulo local", true);
+            var setupModule = Theme.Button("Configurar integração", true);
             setupModule.Location = new Point(350, 187);
             setupModule.Width = 220;
             setupModule.Click += (_, _) =>
@@ -887,7 +887,8 @@ internal sealed class MainForm : Form
         UpdateFeatureStates(status.FeatureStates);
         var nativeReady = !UsesClientModule || status.NativeClient is { Ready: true };
         _connectionLabel.Text = !nativeReady
-            ? status.NativeClient is { TransportConnected: true } ? "MÓDULO AGUARDA EXECUÇÃO" : "MÓDULO NÃO CONECTADO"
+            ? status.Ready && status.PlayerOnline ? "CONEXÃO PARCIAL"
+                : status.NativeClient is { TransportConnected: true } ? "AGUARDANDO EXECUÇÃO" : "AGUARDANDO FIVEM"
             : status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
             : status.Ready && status.PlayerOnline ? "PERSONAGEM VALIDADO"
             : status.Ready ? "AGUARDANDO PERSONAGEM" : "AGUARDANDO FIVEM COMPATÍVEL";
@@ -965,7 +966,11 @@ internal sealed class MainForm : Form
 
     private void UpdateReadinessBanner()
     {
-        _readinessPrimary.Text = UsesClientModule ? "Preparar módulo local" : "Usar cliente local";
+        _readinessPrimary.Text = UsesClientModule ? "Configurar integração" : "Conectar automaticamente";
+        _readinessPrimary.Visible = !UsesClientModule || _lastStatus?.NativeClient?.TransportConnected != true &&
+            ClientModuleInstallation.Current.State is not ClientModuleInstallationState.ReadyOnDisk;
+        _readinessRefresh.Left = _readinessPrimary.Visible ? 256 : 26;
+        _saveDiagnostic.Left = _readinessPrimary.Visible ? 486 : 256;
         _readinessPrimary.Enabled = !_closing && !_disconnecting;
         _readinessRefresh.Enabled = !_closing && !_disconnecting;
         _saveDiagnostic.Enabled = !_closing;
@@ -979,7 +984,7 @@ internal sealed class MainForm : Form
             ClientModuleInstallation.Refresh();
             var reason = NativeActionBlockReason();
             _readinessDetails.Text = string.IsNullOrEmpty(reason)
-                ? "Cliente local conectado e execução nativa confirmada. As funções disponíveis estão liberadas."
+                ? "Conexão confirmada. Use as funções habilitadas; consulte os resultados na aba Conexão."
                 : reason;
             _readinessDetails.ForeColor = string.IsNullOrEmpty(reason) ? Theme.Success : Theme.Warning;
         }
@@ -988,7 +993,7 @@ internal sealed class MainForm : Form
 
     private string NativeActionBlockReason(string? capability = null)
     {
-        if (!UsesClientModule) return "Modo externo. Clique em Usar cliente local para conectar as funções nativas.";
+        if (!UsesClientModule) return "Modo externo. Clique em Conectar automaticamente para detectar a integração do FiveM.";
         if (_closing || _disconnecting) return "A sessão está sendo encerrada. Aguarde para conectar novamente.";
         if (!_client.DetectionEnabled) return "Detecção interrompida. Clique em Verificar novamente para procurar o FiveM.";
         var native = _healthy ? _lastStatus?.NativeClient : null;
@@ -1004,7 +1009,7 @@ internal sealed class MainForm : Form
             if (native is { TransportConnected: true })
                 return string.IsNullOrWhiteSpace(native.Message)
                     ? "O módulo conectou, mas o FiveM ainda não confirmou execução nativa. Aguarde entrar na cidade."
-                    : native.Message;
+                    : NativeDisplayMessage(native);
             if (installation.RunningGameProcessId is null && installation.RootSource != "unknown")
                 return installation.State is ClientModuleInstallationState.Missing or ClientModuleInstallationState.Outdated
                     ? "FiveM não encontrado. Prepare o módulo local com o jogo fechado; depois abra o jogo e entre na cidade. " + installation.Reason
@@ -1029,20 +1034,30 @@ internal sealed class MainForm : Form
         return "";
     }
 
+    private static string NativeDisplayMessage(NativeClientStatus native)
+    {
+        if (native.Error == 1003 && native.Message.StartsWith("ASI loaded; registered game callback has not entered.", StringComparison.Ordinal))
+            return "O FiveM carregou a integração, mas não iniciou sua execução. A autorização de ScriptHook do servidor ainda não foi confirmada. As funções habilitadas continuam disponíveis.";
+        if (native.Error == 1003 && native.Message.StartsWith("The registered game callback stopped updating;", StringComparison.Ordinal))
+            return "A execução da integração no FiveM parou. As funções que dependem dela aguardam uma nova confirmação.";
+        return native.Message;
+    }
+
     private void UpdateActionBlockMessages()
     {
         var reason = NativeActionBlockReason();
+        var playerReason = CanInvokeSuicide() || CanInvokeLocalAction("player.godMode") ? "" : reason;
         if (!_reviving && !_suiciding && DateTimeOffset.UtcNow >= _playerActionFeedbackUntilUtc)
         {
-            if (!string.IsNullOrEmpty(reason))
+            if (!string.IsNullOrEmpty(playerReason))
             {
-                _lastPlayerBlockReason = reason;
-                _playerActionStatus.Text = reason;
+                _lastPlayerBlockReason = playerReason;
+                _playerActionStatus.Text = playerReason;
                 _playerActionStatus.ForeColor = Theme.Warning;
             }
             else if (_playerActionStatus.Text == _lastPlayerBlockReason)
             {
-                _playerActionStatus.Text = "Ações locais disponíveis. Suicídio pede confirmação.";
+                _playerActionStatus.Text = "Use as funções habilitadas. Suicídio pede confirmação.";
                 _playerActionStatus.ForeColor = Theme.Muted;
                 _lastPlayerBlockReason = null;
             }
@@ -1142,10 +1157,10 @@ internal sealed class MainForm : Form
     }
 
     private bool CanInvokeLocalAction(string capability) =>
-        !_closing && !_disconnecting && _healthy && _client.DetectionEnabled && _session is not null &&
-        _lastStatus is { Ready: true, PlayerOnline: true, SessionActive: true } &&
-        (!UsesClientModule || _lastStatus.NativeClient is { Ready: true }) &&
-        _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
+        !_closing && !_disconnecting && _client.DetectionEnabled && _session is not null &&
+        _lastStatus is { } status && StandaloneUiPolicy.CanInvokeAction(capability, _healthy, status.Ready,
+            status.PlayerOnline, status.SessionActive, _knownCapabilities,
+            !UsesClientModule || status.NativeClient is { Ready: true });
 
     private bool CanInvokeSuicide() => CanInvokeLocalAction("player.suicide");
 

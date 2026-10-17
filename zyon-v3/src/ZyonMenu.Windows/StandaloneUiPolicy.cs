@@ -39,6 +39,11 @@ internal sealed class StandaloneUiPolicy
     }
 
     public static bool CanInvokeAction(string capability, bool healthy, bool ready, bool localPlayerReady,
-        bool sessionActive, ISet<string> clientCapabilities) =>
-        healthy && ready && localPlayerReady && sessionActive && clientCapabilities.Contains(capability);
+        bool sessionActive, ISet<string> clientCapabilities, bool nativeExecutionReady = true)
+    {
+        bool requiresNative = capability is "player.revive" or "player.noclip" or "player.invisible" or
+            "weapons.freezeAmmo" or "silent" or "vehicle.lock" or "vehicle.unlock";
+        return healthy && ready && localPlayerReady && sessionActive && clientCapabilities.Contains(capability) &&
+            (!requiresNative || nativeExecutionReady);
+    }
 }

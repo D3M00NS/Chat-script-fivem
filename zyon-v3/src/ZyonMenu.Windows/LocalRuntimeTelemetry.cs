@@ -98,7 +98,26 @@ internal sealed class WeaponTelemetry
 internal sealed class SignatureTelemetry
 {
     public bool Complete { get; set; }
+    public ulong ModuleBase { get; set; }
+    // ProcessModule.ModuleMemorySize describes the host image registered with Windows.
     public uint ImageSize { get; set; }
+    public uint? DeclaredImageSize { get; set; }
+    public uint? EffectiveImageSize { get; set; }
+    public uint? DosPeOffset { get; set; }
+    public uint? PeSignature { get; set; }
+    public ushort? Machine { get; set; }
+    public ushort? OptionalHeaderMagic { get; set; }
+    public int? DeclaredSectionCount { get; set; }
+    public int? DeclaredOptionalHeaderSize { get; set; }
+    public uint? DeclaredHeadersSize { get; set; }
+    public int? SectionTableOffset { get; set; }
+    public int? SectionTableEnd { get; set; }
+    public uint? ProtectedHeaderSize { get; set; }
+    public long HeaderBytesRead { get; set; }
+    public bool DosHeaderRead { get; set; }
+    public bool CoffHeaderRead { get; set; }
+    public bool OptionalHeaderAndSectionTableRead { get; set; }
+    public string ImageBoundsReason { get; set; } = "Limites ainda não analisados.";
     public long BytesRead { get; set; }
     public long UnreadableBytes { get; set; }
     public int ReadFailures { get; set; }

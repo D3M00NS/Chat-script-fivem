@@ -57,7 +57,7 @@ for flavor, folder in (("completo", "win-x64"), ("compacto", "compacto")):
         "windowsRuntimeTested": False,
         "fiveMRuntimeTested": False,
         "serverInstallationRequired": False,
-        "defaultBackend": "client-module",
+        "defaultBackend": "automatic",
         "externalOnlyArgument": "--external",
         "implementedExternalFunctions": ["aim", "esp", "godMode", "noRecoil", "noSpread", "suicideHealthWrite"],
         "implementedClientModuleFunctions": ["godMode", "noclip", "invisibility", "freezeAmmo", "nativeRevive", "suicide", "lockVehicle", "unlockVehicle"],
@@ -79,34 +79,29 @@ for flavor, folder in (("completo", "win-x64"), ("compacto", "compacto")):
     runtime_note = ("Runtime incluido: abra ZyonMenu.exe.\n" if flavor == "completo" else
                     "Requer .NET Desktop Runtime 8 x64: https://dotnet.microsoft.com/download/dotnet/8.0\n")
     quick_start = (
-        f"ZYON {VERSION} - EXECUTAVEL EXTERNO / SEM RECURSO NO SERVIDOR\n\n"
-        "1. Extraia o ZIP completo para pasta nova e feche o menu anterior.\n"
-        "2. Com o FiveM fechado, abra ZyonMenu.exe. O modo inicial e CLIENTE LOCAL.\n"
-        "3. Na engrenagem/Conexao, use Preparar modulo local e selecione FiveM.app da sua instalacao.\n"
-        "4. Abra o FiveM novamente e entre no servidor. Aguarde a confirmacao do modulo e das capacidades.\n"
-        "5. Noclip usa W/A/S/D, Espaco, Ctrl e Shift; velocidade1-50m/s muda durante o voo.\n"
-        "6. Veiculo: bloqueia/desbloqueia o carro ocupado ou mais proximo ate8m, se houver controle nativo.\n"
-        "7. Silent Aim experimental: solte o gatilho, mire e pressione LMB+ativacao. Uma tentativa por pressionamento; somente jogadores.\n"
-        "   Enquanto ativo, suprime a entrada normal de tiro inclusive sem alvo. Nao comprova redirecionamento do tiro original nem acerto.\n"
-        "8. Apos testar, use Salvar diagnostico e envie o JSON com o resultado de cada funcao.\n\n"
+        f"ZYON {VERSION} - CONEXAO AUTOMATICA / SEM RECURSO NO SERVIDOR\n\n"
+        "1. Feche a copia anterior do menu e extraia o ZIP completo para pasta nova.\n"
+        "2. Abra ZyonMenu.exe ou Abrir-Zyon.cmd e mantenha o FiveM b3258 aberto. Nao precisa escolher modo.\n"
+        "3. GodMode e suicidio preservam automaticamente o caminho de memoria validado. Confira a situacao por funcao.\n"
+        "4. O ASI e identico ao da 3.3.2. Se ja esta carregado, nao precisa reinstalar a integracao nesta atualizacao.\n"
+        "5. No Recoil/No Spread: desative as opcoes antes de usar Verificar novamente para refazer a leitura.\n"
+        "6. Noclip, revive, invisibilidade, municao, portas e Silent Aim ainda dependem de execucao nativa confirmada.\n"
+        "7. Se a integracao ainda nao estiver instalada, Conexao > Configurar integracao oferece o instalador com FiveM fechado.\n\n"
         + runtime_note + "\n"
-        "Nenhum arquivo e instalado no servidor. O modulo local so funciona onde plugins/ScriptHook ja sao permitidos e pure<2.\n"
-        "O modulo implementa GodMode, noclip/voar, invisibilidade, Freeze Ammo, revive nativo e suicidio; teste no Windows ainda pendente.\n"
-        "Reviver nativo NAO limpa morte/hospital ESX/QBCore. Bloqueio nativo NAO concede chaves do framework.\n"
-        "Silent Aim oferece apenas disparo direcionado experimental. Voz recebida, ADMs/nomes e oclusao ESP continuam pendentes.\n"
-        "Aim/ESP/recoil/spread usam o backend de memoria b3258 e suas validacoes.\n"
-        "Para usar somente o backend externo anterior: Abrir-somente-externo.cmd ou ZyonMenu.exe --external.\n"
-        "Compilacao e verificacoes automatizadas registradas no manifest. Windows/FiveM real nao executados aqui.\n"
-        "Se abrir o modo externo, use Usar cliente local no banner. Preparar modulo e Verificar novamente ficam visiveis em todas as abas.\n"
-        "Consulte codigo-fonte/README.md e codigo-fonte/docs/client-module-3.3.2.md.\n"
+        "O print anterior confirma ASI carregado, mas seu callback nunca executou. A causa dessa falha ainda nao foi confirmada.\n"
+        "Esta atualizacao corrige roteamento e leitura PE; nao comprova que todas as funcoes passaram a funcionar no jogo.\n"
+        "O modulo local usa a execucao oficial de plugins: exige ScriptHook permitido pelo servidor e pure<2.\n"
+        "Silent Aim e experimental e pode impedir tiros; nao comprova redirecionamento ou acerto.\n"
+        "Revive nao limpa morte/hospital ESX/QBCore; portas nao concedem chaves. Voz, ADMs/nomes e oclusao ESP continuam pendentes.\n"
+        "Testes e compilacao nao substituem gameplay. Use Salvar diagnostico para registrar o resultado.\n"
+        "Consulte codigo-fonte/README.md e codigo-fonte/docs/automatic-connection-3.3.3.md.\n"
     )
     archive = OUTPUT / f"{PREFIX}-{flavor}.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
         for path in binary_files:
             bundle.write(path, PREFIX + "/" + path.name)
         bundle.writestr(PREFIX + "/LEIA-ME.txt", quick_start.replace("\n", "\r\n"))
-        bundle.writestr(PREFIX + "/Abrir-modulo-local.cmd", '@echo off\r\ncd /d "%~dp0"\r\nstart "" "ZyonMenu.exe" --client-module\r\n')
-        bundle.writestr(PREFIX + "/Abrir-somente-externo.cmd", '@echo off\r\ncd /d "%~dp0"\r\nstart "" "ZyonMenu.exe" --external\r\n')
+        bundle.writestr(PREFIX + "/Abrir-Zyon.cmd", '@echo off\r\ncd /d "%~dp0"\r\nstart "" "ZyonMenu.exe"\r\n')
         bundle.writestr(PREFIX + "/manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
         for path in sorted(source_files):
             bundle.write(path, PREFIX + "/codigo-fonte/" + path.relative_to(PROJECT).as_posix())

@@ -42,6 +42,7 @@ public static class ExistingInstancePolicy
             "FiveM b3258 / standalone" => LocalMenuMode.External,
             "modo administrativo" => LocalMenuMode.Administration,
             "FiveM b3258 / cliente local" => LocalMenuMode.ClientModule,
+            "FiveM b3258" => LocalMenuMode.ClientModule,
             _ => null
         };
         if (mode is null) return false;

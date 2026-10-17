@@ -12,8 +12,8 @@ using ZyonMenu.Core;
 namespace ZyonMenu.Windows;
 
 /// <summary>
-/// The optional module owns native player/ammo operations. The wrapped provider
-/// owns only existing memory Aim/ESP/recoil/spread operations. No module is loaded
+/// The optional module owns native-only operations. The wrapped provider retains
+/// validated memory operations, including GodMode and health-zero actions. No module is loaded
 /// or installed by this class, and no native address is accepted from the wire.
 /// </summary>
 internal sealed partial class ClientModuleSession : ILocalGameSession
@@ -44,8 +44,15 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
     private int? _identityPid, _externalPid;
     private uint _identityPed;
     private bool _identityReady, _externalReady;
+    private long _externalPlayerEpoch, _identityExternalEpoch;
+    private int? _identityExternalPid, _godOwnerPid;
+    private bool _identityExternalReady;
+    private GodOwner _godOwner;
+    private ClientModuleSettingsFlags _nativeSettingsFlags;
     private DateTimeOffset? _nativeObservedUtc;
     private CancellationTokenSource? _actionAbort;
+
+    private enum GodOwner { Unselected, Memory, Native }
 
     private sealed class Connection(NamedPipeClientStream stream, int processId, byte[] token, long epoch) : IDisposable
     {
@@ -93,7 +100,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         var memory = await _external.GetStatusAsync(cancellationToken).ConfigureAwait(false);
         lock (_gate)
         {
-            _externalPid = memory.PlayerId; _externalReady = memory.Ready;
+            ObserveMemoryLocked(memory);
             RefreshIdentityLocked();
             bool ready = NativeReadyLocked();
             var result = ExternalStateSerialization.Clone(memory);
@@ -105,13 +112,27 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                     ? "O leitor de memória e o módulo pertencem a processos diferentes. Feche cópias extras do FiveM e detecte novamente."
                     : _moduleMessage
             };
+            bool memoryGod = MemoryGodAvailableLocked(memory);
+            bool memorySuicide = MemorySuicideAvailableLocked(memory);
             var capabilities = memory.Ready
-                ? memory.Capabilities.Where(name => !NativeFeatures.Contains(name, StringComparer.OrdinalIgnoreCase)).ToList()
+                ? memory.Capabilities.Where(name => !NativeFeatures.Contains(name, StringComparer.OrdinalIgnoreCase) ||
+                    name.Equals("player.godMode", StringComparison.OrdinalIgnoreCase) && memoryGod ||
+                    name.Equals("player.suicide", StringComparison.OrdinalIgnoreCase) && memorySuicide).ToList()
                 : [];
-            result.FeatureStates.RemoveAll(feature => NativeFeatures.Contains(feature.Name, StringComparer.OrdinalIgnoreCase));
+            result.FeatureStates.RemoveAll(feature => NativeFeatures.Contains(feature.Name, StringComparer.OrdinalIgnoreCase) &&
+                !(feature.Name.Equals("player.godMode", StringComparison.OrdinalIgnoreCase) && memoryGod) &&
+                !(feature.Name.Equals("player.suicide", StringComparison.OrdinalIgnoreCase) && memorySuicide));
             for (int index = 0; index < NativeFeatures.Length; index++)
             {
+                if (index == 0 && memoryGod || index == 5 && memorySuicide)
+                {
+                    if (!result.FeatureStates.Any(feature => feature.Name.Equals(NativeFeatures[index], StringComparison.OrdinalIgnoreCase)))
+                        result.FeatureStates.Add(new FeatureStatus { Name = NativeFeatures[index], State = "ready",
+                            Message = "Disponível pelo leitor de memória validado; não depende da execução do módulo opcional." });
+                    continue;
+                }
                 bool supported = ready && _native!.Capabilities.HasFlag(NativeCapabilities[index]);
+                if (index == 0 && _godOwner == GodOwner.Memory) supported = false;
                 if (supported) capabilities.Add(NativeFeatures[index]);
                 bool action = index is >= 4 and <= 7;
                 bool directedFireFailed = index == 8 && supported && _native!.Error == 13;
@@ -144,7 +165,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                 result.PlayerId = _connection!.ProcessId;
                 result.PlayerName = "Personagem validado pelo módulo local b3258";
             }
-            result.Version = AppIdentity.DisplayVersion + " / externo + módulo local opcional";
+            result.Version = AppIdentity.DisplayVersion + " / conexão automática";
             result.DesiredRevision = _revision;
             bool nativeApplied = !_nativeParticipated || ready && _native!.AppliedRevision == (ulong)_revision &&
                 _native.StateFlags.HasFlag(ClientModuleStateFlags.SettingsActive);
@@ -185,23 +206,50 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         try
         {
             EnsureSettingsFence(fence);
-            var shadow = MemorySettings(snapshot);
             var memory = await _external.GetStatusAsync(deadline.Token).ConfigureAwait(false);
             Connection? connection;
+            MenuSettings nativeSettings, shadow;
+            long memoryEpoch;
+            GodOwner godOwner;
+            int? godOwnerPid;
             lock (_gate)
             {
-                _externalPid = memory.PlayerId; _externalReady = memory.Ready;
+                ObserveMemoryLocked(memory);
                 RefreshIdentityLocked();
                 connection = NativeReadyLocked() ? _connection : null;
-                ValidateRequestedNativeLocked(snapshot, connection is not null);
+                godOwner = _godOwner;
+                godOwnerPid = _godOwnerPid;
+                if (snapshot.Player.GodMode && godOwner == GodOwner.Unselected)
+                {
+                    // Pin one writer for this process. Readiness changes never
+                    // migrate an enabled flag to the other provider.
+                    if (HasCapability(memory, "player.godMode")) godOwner = GodOwner.Memory;
+                    else if (connection is not null && _native!.Capabilities.HasFlag(ClientModuleCapabilities.God)) godOwner = GodOwner.Native;
+                    else throw new InvalidOperationException("Nenhum provedor validado anunciou GodMode para este processo.");
+                    godOwnerPid = memory.Ready ? memory.PlayerId : connection?.ProcessId;
+                }
+                bool memoryGod = godOwner == GodOwner.Memory;
+                if (snapshot.Player.GodMode && memoryGod && !MemoryGodAvailableLocked(memory))
+                    throw new InvalidOperationException("GodMode pertence ao leitor de memória deste processo, que ainda não está validado; a opção não foi transferida ao módulo.");
+                nativeSettings = ExternalStateSerialization.Clone(snapshot);
+                if (memoryGod) nativeSettings.Player.GodMode = false;
+                shadow = MemorySettings(snapshot, memoryGod);
+                memoryEpoch = _externalPlayerEpoch;
+                ValidateRequestedNativeLocked(nativeSettings, connection is not null);
+                // A memory-only revision must not depend on an optional pipe.
+                // Keep the explicit zero frame when it restores an earlier
+                // native configuration owned by this same connection.
+                if (NativeFlags(nativeSettings) == 0 && !_nativeParticipated) connection = null;
             }
             if (!memory.Ready && HasMemoryFeatures(shadow))
-                throw new InvalidOperationException("Aim/ESP/recoil/spread exigem o backend de memória validado para este processo.");
+                throw new InvalidOperationException("As opções de memória exigem um leitor validado para este processo.");
             long memoryRevision = 0;
             if (memory.Ready)
             {
                 await _external.PushSettingsAsync(shadow, deadline.Token).ConfigureAwait(false);
                 var updated = await _external.GetStatusAsync(deadline.Token).ConfigureAwait(false);
+                if (!updated.Ready || updated.PlayerId != memory.PlayerId || _external.PlayerEpoch != memoryEpoch)
+                    throw new InvalidOperationException("O personagem ou processo de memória mudou durante a configuração; as opções não foram enviadas ao outro provedor.");
                 memoryRevision = updated.DesiredRevision;
             }
             EnsureSettingsFence(fence);
@@ -210,12 +258,14 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             {
                 if (connection is not null && (!ReferenceEquals(connection, _connection) || !NativeReadyLocked()))
                     throw new InvalidOperationException("A conexão nativa mudou durante a configuração; nenhuma repetição foi enviada.");
+                _godOwner = godOwner; _godOwnerPid = godOwnerPid;
                 _settings = snapshot; _hasSettings = true; revision = checked(++_revision);
                 _externalParticipated = memory.Ready && HasMemoryFeatures(shadow); _externalRevision = memoryRevision;
                 _nativeParticipated = connection is not null;
+                _nativeSettingsFlags = NativeFlags(nativeSettings);
             }
             if (connection is not null)
-                await SendSettingsAsync(connection, snapshot, revision, deadline.Token, fence).ConfigureAwait(false);
+                await SendSettingsAsync(connection, nativeSettings, revision, deadline.Token, fence).ConfigureAwait(false);
             lock (_gate) AddEventLocked("settings", "Configuração enviada aos provedores correspondentes; aceite não significa efeito observado no jogo.");
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -266,6 +316,32 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         try
         {
             await _mutations.WaitAsync(deadline.Token).ConfigureAwait(false); entered = true;
+            if (action == ClientModuleAction.Suicide)
+            {
+                var memory = await _external.GetStatusAsync(deadline.Token).ConfigureAwait(false);
+                var memoryAction = PrepareMemorySuicide(memory, expectedPlayerEpoch);
+                if (memoryAction is not null)
+                {
+                    connection = memoryAction.Connection;
+                    if (connection is not null)
+                    {
+                        await SendSettingsAsync(connection, memoryAction.Settings, memoryAction.Revision, deadline.Token, fence, action: true).ConfigureAwait(false);
+                        await WaitForSettingsAsync(connection, (ulong)memoryAction.Revision, expectedPlayerEpoch, deadline.Token).ConfigureAwait(false);
+                    }
+                    lock (_gate) RequireMemoryActionTargetLocked(memoryAction, expectedPlayerEpoch, fence);
+                    await _external.SuicideAsync(memoryAction.ExternalEpoch, deadline.Token).ConfigureAwait(false);
+                    var updated = await _external.GetStatusAsync(deadline.Token).ConfigureAwait(false);
+                    lock (_gate)
+                    {
+                        ObserveMemoryLocked(updated);
+                        RequireMemoryActionTargetLocked(memoryAction, expectedPlayerEpoch, fence);
+                        _externalRevision = updated.DesiredRevision;
+                        _externalParticipated = HasMemoryFeatures(MemorySettings(memoryAction.Settings, memoryGod: true));
+                        AddEventLocked("observed", "Saúde zero observada pelo leitor de memória; estado médico e morte no servidor não foram confirmados. A ação não será repetida.");
+                    }
+                    return;
+                }
+            }
             var prepared = PrepareAction(action, expectedPlayerEpoch);
             connection = prepared.Connection;
             uint ped = prepared.Ped;
@@ -328,9 +404,9 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         catch (Exception error) when (error is IOException or InvalidDataException or InvalidOperationException or ArgumentException or OperationCanceledException or TimeoutException)
         {
             if (connection is not null) AbortConnection(connection, "Ação encerrada sem observação válida; não será reenviada. " + error.Message);
-            lock (_gate) AddEventLocked("error", "Ação nativa não confirmada. " + error.Message);
+            lock (_gate) AddEventLocked("error", "Ação local não confirmada. " + error.Message);
             if (error is OperationCanceledException && !cancellationToken.IsCancellationRequested)
-                throw new TimeoutException("O módulo não confirmou a ação em dois segundos; a ação não será repetida.", error);
+                throw new TimeoutException("O provedor local não confirmou a ação em dois segundos; a ação não será repetida.", error);
             throw;
         }
         finally
@@ -339,6 +415,40 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             if (entered) _mutations.Release();
             Interlocked.Exchange(ref _actionPending, 0);
         }
+    }
+
+    private sealed record MemorySuicide(Connection? Connection, MenuSettings Settings, long Revision, int ProcessId, long ExternalEpoch);
+
+    private MemorySuicide? PrepareMemorySuicide(ServerStatus memory, long expectedPlayerEpoch)
+    {
+        lock (_gate)
+        {
+            ObserveMemoryLocked(memory);
+            RefreshIdentityLocked();
+            if (!MemorySuicideAvailableLocked(memory)) return null;
+            if (expectedPlayerEpoch != _playerEpoch || memory.PlayerId is null)
+                throw new InvalidOperationException("O personagem ou processo mudou desde a solicitação; a ação de memória foi cancelada.");
+            var settings = ExternalStateSerialization.Clone(_settings);
+            settings.Player.GodMode = false; settings.Player.Noclip = false;
+            _settings = settings; _hasSettings = true;
+            long revision = checked(++_revision);
+            // The external action owns restoration and readback. Until it
+            // returns, an older memory revision cannot confirm this snapshot.
+            _externalParticipated = true; _externalRevision = long.MaxValue;
+            var connection = NativeReadyLocked() && (_nativeParticipated || NativeFlags(settings) != 0) ? _connection : null;
+            _nativeParticipated = connection is not null;
+            _nativeSettingsFlags = NativeFlags(settings);
+            return new MemorySuicide(connection, settings, revision, memory.PlayerId.Value, _externalPlayerEpoch);
+        }
+    }
+
+    private void RequireMemoryActionTargetLocked(MemorySuicide target, long expectedEpoch, long fence)
+    {
+        RefreshIdentityLocked();
+        if (_disposed != 0 || !DetectionEnabled || fence != Interlocked.Read(ref _settingsEpoch) ||
+            expectedEpoch != _playerEpoch || !_externalReady || _externalPid != target.ProcessId ||
+            _external.PlayerEpoch != target.ExternalEpoch)
+            throw new InvalidOperationException("O alvo ou a sessão de memória mudou; a ação não foi transferida para outro personagem.");
     }
 
     private (Connection Connection, uint Ped, ulong NativeTick, MenuSettings? SuicideSettings, long SettingsRevision)
@@ -351,6 +461,8 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
             RequireActionTargetLocked(expectedPlayerEpoch);
             var capability = CapabilityForAction(action);
             if (!_native!.Capabilities.HasFlag(capability)) throw new NotSupportedException("O módulo não anunciou essa operação nativa.");
+            if (action == ClientModuleAction.Suicide && _godOwner == GodOwner.Memory)
+                throw new InvalidOperationException("A ação de saúde aguarda o leitor que possui o GodMode; não foi transferida ao módulo nativo.");
             MenuSettings? suicideSettings = null;
             long settingsRevision = 0;
             if (action == ClientModuleAction.Suicide)
@@ -361,6 +473,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                 suicideSettings.Player.GodMode = false;
                 suicideSettings.Player.Noclip = false;
                 _settings = suicideSettings; _hasSettings = true; _nativeParticipated = true;
+                _nativeSettingsFlags = NativeFlags(suicideSettings);
                 settingsRevision = checked(++_revision);
             }
             return (_connection!, _native.Ped, _native.NativeTick, suicideSettings, settingsRevision);
@@ -408,12 +521,14 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                 Product = "Zyon optional local client module", Version = AppIdentity.DisplayVersion,
                 CapturedUtc = DateTimeOffset.UtcNow, DetectionEnabled, PlayerEpoch = _playerEpoch,
                 Installation = installation,
+                Routing = new { GodModeOwner = _godOwner.ToString(), GodModeProcessId = _godOwnerPid,
+                    ExternalPlayerEpoch = _externalPlayerEpoch },
                 Configuration = ExternalStateSerialization.Clone(_settings),
                 Native = new { ProcessId = _connection?.ProcessId, ConnectionEpoch = _connectionEpoch,
                     State = _native, ObservedUtc = _nativeObservedUtc, ReadyFresh = NativeReadyLocked(),
                     FrameAgeMilliseconds = _native is null ? (long?)null : Environment.TickCount64 - (long)_native.NativeTick,
                     Message = _moduleMessage, DesiredRevision = _revision,
-                    Meaning = "Only matching action nonce + native frame observation confirms the requested action. Native revive does not reset server medical state; door observations do not prove framework keys or server permissions." },
+                    Meaning = "Native actions require a matching nonce and native frame observation. External health actions confirm only the validated memory health-zero readback. Native revive does not reset server medical state; door observations do not prove framework keys or server permissions." },
                 External = parsed.RootElement.Clone(), Events = _events.Select(ExternalStateSerialization.Clone).ToArray()
             });
     }
@@ -433,7 +548,7 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
                         var events = await _external.GetEventsAsync(_externalCursor, deadline.Token).ConfigureAwait(false);
                         lock (_gate)
                         {
-                            _externalPid = memory.PlayerId; _externalReady = memory.Ready;
+                            ObserveMemoryLocked(memory);
                             foreach (var item in events.Events.Where(item => item.Id > _externalCursor))
                                 AddEventLocked("external/" + item.Type, item.Message);
                             _externalCursor = Math.Max(_externalCursor, events.Cursor);
@@ -559,6 +674,11 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         connection.SeenTick = status.NativeTick; connection.SeenDesired = status.DesiredRevision;
         connection.SeenApplied = Math.Max(connection.SeenApplied, status.AppliedRevision);
         _native = status;
+        // A zero frame is a real restoration transaction. Only its matching
+        // applied observation can release the optional native participant.
+        if (_nativeParticipated && _nativeSettingsFlags == 0 && _hasSettings &&
+            status.AppliedRevision == (ulong)_revision && status.StateFlags.HasFlag(ClientModuleStateFlags.SettingsActive))
+            _nativeParticipated = false;
         long age = Environment.TickCount64 - (long)status.NativeTick;
         _nativeObservedUtc = age is >= 0 and <= 1000 ? DateTimeOffset.UtcNow.AddMilliseconds(-age) : null;
         _moduleMessage = status.Message.Length == 0 ? "Aguardando uma observação nativa recente." : status.Message;
@@ -573,12 +693,38 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         int? pid = _connection?.ProcessId;
         uint ped = _native?.Ped ?? 0;
         bool ready = NativeReadyLocked();
-        if (_identityPid != pid || _identityPed != ped || _identityReady != ready)
+        if (_identityPid != pid || _identityPed != ped || _identityReady != ready ||
+            _identityExternalPid != _externalPid || _identityExternalReady != _externalReady ||
+            _identityExternalEpoch != _externalPlayerEpoch)
         {
             _identityPid = pid; _identityPed = ped; _identityReady = ready;
+            _identityExternalPid = _externalPid; _identityExternalReady = _externalReady;
+            _identityExternalEpoch = _externalPlayerEpoch;
             Interlocked.Increment(ref _playerEpoch);
         }
     }
+
+    private void ObserveMemoryLocked(ServerStatus memory)
+    {
+        _externalPid = memory.PlayerId; _externalReady = memory.Ready;
+        _externalPlayerEpoch = _external.PlayerEpoch;
+        int? process = memory.Ready ? memory.PlayerId : _connection?.ProcessId;
+        if (process is not null && _godOwnerPid is not null && process != _godOwnerPid)
+        {
+            _godOwner = GodOwner.Unselected;
+            _godOwnerPid = null;
+        }
+    }
+
+    private static bool HasCapability(ServerStatus memory, string capability) => memory.Ready && memory.PlayerOnline && memory.PlayerId is > 0 &&
+        memory.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
+
+    private bool MemoryGodAvailableLocked(ServerStatus memory) => DetectionEnabled &&
+        _godOwner != GodOwner.Native && HasCapability(memory, "player.godMode");
+
+    private bool MemorySuicideAvailableLocked(ServerStatus memory) => DetectionEnabled &&
+        _godOwner != GodOwner.Native && HasCapability(memory, "player.suicide") &&
+        (!_settings.Player.Noclip || NativeReadyLocked());
 
     private void RequireActionTargetLocked(long expectedEpoch)
     {
@@ -616,14 +762,15 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         {
             if (expected is not null && !ReferenceEquals(expected, _connection)) return;
             dispose = _connection; _connection = null; _native = null; _nativeObservedUtc = null;
-            _nativeParticipated = false; _hasSettings = false;
+            if (_nativeParticipated) _hasSettings = false;
+            _nativeParticipated = false;
             if (_moduleMessage != message) AddEventLocked("module", message);
             _moduleMessage = message;
             if (dispose is not null) Interlocked.Increment(ref _settingsEpoch);
             actionAbort = _actionAbort;
             RefreshIdentityLocked();
         }
-        TryCancel(actionAbort);
+        if (dispose is not null) TryCancel(actionAbort);
         dispose?.Dispose();
     }
 
@@ -656,17 +803,17 @@ internal sealed partial class ClientModuleSession : ILocalGameSession
         return settings;
     }
 
-    private static MenuSettings MemorySettings(MenuSettings settings)
+    private static MenuSettings MemorySettings(MenuSettings settings, bool memoryGod)
     {
         var shadow = ExternalStateSerialization.Clone(settings);
-        shadow.Player.GodMode = false; shadow.Player.Noclip = false; shadow.Player.Invisible = false;
+        shadow.Player.GodMode &= memoryGod; shadow.Player.Noclip = false; shadow.Player.Invisible = false;
         shadow.Weapons.FreezeAmmo = false;
         shadow.Silent.Enabled = false; shadow.Silent.DrawFov = false;
         return shadow;
     }
 
     private static bool HasMemoryFeatures(MenuSettings settings) => settings.Aim.Enabled || settings.Aim.DrawFov ||
-        settings.Esp.Enabled || settings.Weapons.NoRecoil || settings.Weapons.NoSpread;
+        settings.Esp.Enabled || settings.Weapons.NoRecoil || settings.Weapons.NoSpread || settings.Player.GodMode;
 
     private static ClientModuleSettingsFlags NativeFlags(MenuSettings settings) =>
         (settings.Player.GodMode ? ClientModuleSettingsFlags.God : 0) |

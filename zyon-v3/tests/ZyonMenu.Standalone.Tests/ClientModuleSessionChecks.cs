@@ -18,7 +18,8 @@ internal static class ClientModuleSessionChecks
         Func<Checks, Task>[] scenarios = [SeparationAsync, PendingAcknowledgementAsync, NativeOnlyAndStalenessAsync,
             AuthorizationLossAsync, TargetEpochAsync, SettingsActionFenceAsync, NonceAndObservationAsync, MalformedPollRecoveryAsync,
             TimeoutNoReplayAsync, ExperimentalDirectedFireSettingsAsync, VehicleActionsAsync, VehicleCapabilitiesAsync, VehicleTimeoutNoReplayAsync,
-            VehicleTargetAndCancellationAsync, DisconnectAndDisposeAsync];
+            VehicleTargetAndCancellationAsync, DisconnectAndDisposeAsync, AutomaticMemoryWithoutNativeAsync, MemorySuicideFenceAsync,
+            NativeFirstNoMigrationAsync, DisconnectedModuleMemoryAsync, MemoryActionCancellationAsync];
         foreach (var scenario in scenarios)
         {
             // Bound the invocation as well as its awaits: an accidentally held
@@ -46,12 +47,12 @@ internal static class ClientModuleSessionChecks
         settings.Player.NoclipSpeed = 44;
         settings.Player.Invisible = false;
         var shadow = external.Pushed.Single();
-        checks.That(!shadow.Player.GodMode && !shadow.Player.Noclip && !shadow.Player.Invisible && !shadow.Weapons.FreezeAmmo,
-            "Native-owned flags must never be applied by the memory provider.");
+        checks.That(shadow.Player.GodMode && !shadow.Player.Noclip && !shadow.Player.Invisible && !shadow.Weapons.FreezeAmmo,
+            "The validated memory GodMode must retain its writer while exclusive native flags stay out of memory.");
         checks.That(shadow.Aim.Enabled && shadow.Esp.Enabled && shadow.Weapons.NoRecoil && shadow.Weapons.NoSpread,
             "Memory Aim/ESP/recoil/spread must remain owned by the memory provider.");
         var request = pipe.Requests.Single(item => item.Kind == ClientModuleKind.Settings);
-        checks.That(BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(24)) == 15 &&
+        checks.That(BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(24)) == 14 &&
             BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(28)) == 17,
             "The native request must contain only native flags and the captured noclip speed.");
         var status = await provider.GetStatusAsync();
@@ -59,7 +60,7 @@ internal static class ClientModuleSessionChecks
             "A combined configuration may report applied only after both providers observe their corresponding revision.");
         checks.That(status.Capabilities.Contains("aim.enabled") && status.Capabilities.Contains("player.noclip") &&
             status.FeatureStates.Single(item => item.Name == "player.godMode").State == "observed",
-            "Combined status must preserve memory capabilities and use native observations for native features.");
+            "Combined status must preserve memory GodMode observations and native observations for native-only features.");
         checks.That(external.Revives == 0 && external.Suicides == 0, "Health actions must not be delegated to the memory backend.");
         using var diagnostic = JsonDocument.Parse(provider.CaptureDiagnostics());
         checks.That(diagnostic.RootElement.GetProperty("Configuration").GetProperty("Player").GetProperty("NoclipSpeed").GetInt32() == 17,
@@ -246,7 +247,7 @@ internal static class ClientModuleSessionChecks
 
     private static async Task SettingsActionFenceAsync(Checks checks)
     {
-        var external = new MemoryProvider { Ready = true, ProcessId = 101 };
+        var external = new MemoryProvider { Ready = true, ProcessId = 101, SupportsMemoryGod = false, SupportsMemorySuicide = false };
         await using var pipe = new ModulePipe { AutoObserveActions = false };
         using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
         await ReadyAsync(provider);
@@ -382,7 +383,7 @@ internal static class ClientModuleSessionChecks
         await provider.PushSettingsAsync(settings);
         var request = pipe.Requests.Single(item => item.Kind == ClientModuleKind.Settings);
         checks.That(request.Payload.Length == 48 &&
-            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(24)) == 257 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(24)) == 256 &&
             BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(32)) == 157 &&
             BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(36)) == 2 &&
             BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(40)) == 4 &&
@@ -390,8 +391,8 @@ internal static class ClientModuleSessionChecks
             "Directed fire must carry only the explicit experimental flag and validated FOV/bone/key/options in the v2 settings payload.");
         var shadow = external.Pushed.Single();
         shadow.Validate();
-        checks.That(!shadow.Silent.Enabled && !shadow.Silent.DrawFov && !shadow.Player.GodMode,
-            "The wrapped external backend must never receive enabled experimental Silent Aim or native-owned player flags.");
+        checks.That(!shadow.Silent.Enabled && !shadow.Silent.DrawFov && shadow.Player.GodMode,
+            "The external backend must retain its existing GodMode while native-only experimental Silent Aim stays out of memory.");
         var status = await provider.GetStatusAsync();
         var feature = status.FeatureStates.Single(item => item.Name == "silent");
         checks.That(status.Capabilities.Contains("silent") && feature.State == "observed" &&
@@ -581,6 +582,182 @@ internal static class ClientModuleSessionChecks
         pendingPipe.ThrowIfFaulted();
     }
 
+    private static async Task AutomaticMemoryWithoutNativeAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = true, ProcessId = 101 };
+        await using var pipe = new ModulePipe { NativeReady = false };
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await EventuallyAsync(() => Task.FromResult(pipe.Count(ClientModuleKind.Hello) == 1), "The waiting ASI did not connect.");
+        var status = await provider.GetStatusAsync();
+        checks.That(status.Ready && status.Capabilities.Contains("player.godMode") && status.Capabilities.Contains("player.suicide") &&
+            !status.Capabilities.Contains("player.noclip") && !status.Capabilities.Contains("player.revive") &&
+            !status.Capabilities.Contains("vehicle.lock") && !status.Capabilities.Contains("silent"),
+            "A waiting native callback must preserve actual memory operations without inventing native-only capabilities.");
+        checks.That(status.FeatureStates.Single(item => item.Name == "player.godMode").Message == "memory sentinel",
+            "A memory-owned GodMode must retain the memory backend's actual observation.");
+        var settings = Settings(); settings.Player.GodMode = settings.Aim.Enabled = true;
+        await provider.PushSettingsAsync(settings);
+        status = await provider.GetStatusAsync();
+        checks.That(external.Pushed.Single().Player.GodMode && pipe.Count(ClientModuleKind.Settings) == 0 &&
+            status.SessionActive && status.AppliedRevision == status.DesiredRevision,
+            "GodMode and Aim must automatically reach memory while the loaded ASI has never entered its callback.");
+
+        pipe.NativeReady = true;
+        await ReadyAsync(provider);
+        await Task.Delay(260);
+        checks.That(pipe.Count(ClientModuleKind.Settings) == 0 && external.Pushed.Count == 1,
+            "A newly ready native callback must not copy the existing memory configuration or migrate its owner.");
+        await provider.PushSettingsAsync(settings);
+        checks.That(pipe.Count(ClientModuleKind.Settings) == 0 && external.Pushed.Count == 2,
+            "A new explicit memory-only revision must not depend on optional native I/O even when the callback is ready.");
+        settings.Player.Invisible = true;
+        await provider.PushSettingsAsync(settings);
+        var request = pipe.Requests.Single(item => item.Kind == ClientModuleKind.Settings);
+        checks.That(BinaryPrimitives.ReadUInt32LittleEndian(request.Payload.AsSpan(24)) == (uint)ClientModuleSettingsFlags.Invisible &&
+            external.Pushed.Last().Player.GodMode,
+            "A mixed explicit revision must retain one GodMode writer and route only invisibility to native.");
+        await provider.SuicideAsync(provider.PlayerEpoch);
+        checks.That(external.Suicides == 1 && !external.OwnedGodMode && pipe.Count(ClientModuleKind.Action) == 0 &&
+            pipe.Requests.Where(item => item.Kind == ClientModuleKind.Settings)
+                .All(item => BinaryPrimitives.ReadUInt32LittleEndian(item.Payload.AsSpan(24)) == (uint)ClientModuleSettingsFlags.Invisible),
+            "An external health action in a mixed session must retain native invisibility while clearing only its memory-owned GodMode.");
+        settings.Player.Invisible = false;
+        pipe.AutoApplySettings = false;
+        await provider.PushSettingsAsync(settings);
+        status = await provider.GetStatusAsync();
+        checks.That(BinaryPrimitives.ReadUInt32LittleEndian(pipe.Requests.Last(item => item.Kind == ClientModuleKind.Settings).Payload.AsSpan(24)) == 0 &&
+            external.OwnedGodMode && status.AppliedRevision == 0 && status.SessionActive,
+            "Turning off the last native flag must await the applied zero-frame observation while memory GodMode remains independently enabled.");
+        pipe.AutoApplySettings = true;
+        await EventuallyAsync(async () => { var current = await provider.GetStatusAsync(); return current.AppliedRevision == current.DesiredRevision; },
+            "The restoring zero frame never received its applied observation.");
+        checks.That((await provider.GetStatusAsync()).SessionActive && pipe.Count(ClientModuleKind.Settings) == 3,
+            "Observing the native clear must not replay or disable the separate memory configuration.");
+        external.Ready = false;
+        status = await provider.GetStatusAsync();
+        checks.That(!status.Capabilities.Contains("player.godMode") && status.Capabilities.Contains("player.invisible"),
+            "Losing memory must not transfer its GodMode to an already ready native provider.");
+        await checks.ThrowsAsync<InvalidOperationException>(() => provider.PushSettingsAsync(settings),
+            "An enabled memory-owned GodMode must reject an unavailable owner instead of silently migrating.");
+        checks.That(pipe.Count(ClientModuleKind.Settings) == 3, "A rejected owner migration must send no native settings.");
+        pipe.ThrowIfFaulted();
+    }
+
+    private static async Task MemorySuicideFenceAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = true, ProcessId = 101 };
+        await using var pipe = new ModulePipe { NativeReady = false };
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await EventuallyAsync(() => Task.FromResult(pipe.Count(ClientModuleKind.Hello) == 1), "The waiting module did not connect.");
+        var settings = Settings(); settings.Player.GodMode = true;
+        await provider.PushSettingsAsync(settings);
+        external.BlockNextPush();
+        Task stalePush = provider.PushSettingsAsync(settings);
+        await external.PushEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        long expectedExternalEpoch = external.PlayerEpoch;
+        Task suicide = provider.SuicideAsync(provider.PlayerEpoch);
+        await checks.ThrowsAsync<InvalidOperationException>(() => provider.PushSettingsAsync(Settings()),
+            "An external health action must own the same mutation fence as native actions.");
+        external.ReleasePush.TrySetResult();
+        await checks.ThrowsAsync<InvalidOperationException>(() => stalePush,
+            "An older memory settings request must not survive the suicide fence.");
+        await suicide.WaitAsync(TimeSpan.FromSeconds(3));
+        checks.That(external.Suicides == 1 && external.LastSuicideEpoch == expectedExternalEpoch && !external.OwnedGodMode &&
+            pipe.Count(ClientModuleKind.Action) == 0 && pipe.Count(ClientModuleKind.Settings) == 0,
+            "The memory health action must use its captured external epoch exactly once and restore its own GodMode without native dispatch.");
+        using var diagnostic = JsonDocument.Parse(provider.CaptureDiagnostics());
+        checks.That(!diagnostic.RootElement.GetProperty("Configuration").GetProperty("Player").GetProperty("GodMode").GetBoolean(),
+            "The unified snapshot must clear GodMode before an external health action can finish.");
+        long staleTarget = provider.PlayerEpoch;
+        external.PlayerEpoch++;
+        await checks.ThrowsAsync<InvalidOperationException>(() => provider.SuicideAsync(staleTarget),
+            "A replaced external ped must invalidate the unified target even when no native callback ever ran.");
+        checks.That(external.Suicides == 1, "A stale external epoch must not produce another health write.");
+        pipe.NativeReady = true;
+        await ReadyAsync(provider);
+        await Task.Delay(260);
+        checks.That(external.Suicides == 1 && pipe.Count(ClientModuleKind.Action) == 0 && pipe.Count(ClientModuleKind.Settings) == 0,
+            "A callback becoming ready must never replay the previous external suicide or old GodMode configuration.");
+        var observed = (await provider.GetEventsAsync(0)).Events.Where(item => item.Type == "observed").ToArray();
+        checks.That(observed.Length == 1 && observed[0].Message.Contains("Saúde zero", StringComparison.Ordinal),
+            "An external action must report only its health-zero observation, without claiming server medical death.");
+        pipe.ThrowIfFaulted();
+    }
+
+    private static async Task NativeFirstNoMigrationAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = false };
+        await using var pipe = new ModulePipe();
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await ReadyAsync(provider);
+        var settings = Settings(); settings.Player.GodMode = true;
+        await provider.PushSettingsAsync(settings);
+        external.ProcessId = 101; external.Ready = true;
+        await provider.GetStatusAsync();
+        await provider.PushSettingsAsync(settings);
+        checks.That(!external.Pushed.Single().Player.GodMode && pipe.Requests.Where(item => item.Kind == ClientModuleKind.Settings)
+            .All(item => BinaryPrimitives.ReadUInt32LittleEndian(item.Payload.AsSpan(24)) == (uint)ClientModuleSettingsFlags.God),
+            "A native GodMode selected before memory readiness must keep one native writer for that process.");
+        long beforeReplacement = provider.PlayerEpoch;
+        external.PlayerEpoch++;
+        await checks.ThrowsAsync<InvalidOperationException>(() => provider.SuicideAsync(beforeReplacement),
+            "Replacing the memory ped must also invalidate saved action targets in a combined session.");
+        checks.That(external.Suicides == 0 && pipe.Count(ClientModuleKind.Action) == 0,
+            "A rejected unified target must not substitute either available action provider.");
+        await provider.SuicideAsync(provider.PlayerEpoch);
+        checks.That(external.Suicides == 0 && pipe.Count(ClientModuleKind.Action) == 1,
+            "A fresh suicide must use the native route when that provider owns GodMode.");
+        pipe.ThrowIfFaulted();
+    }
+
+    private static async Task DisconnectedModuleMemoryAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = false, ProcessId = 101 };
+        using var provider = new ClientModuleSession(external, () => 101,
+            (_, _) => Task.FromException<NamedPipeClientStream>(new IOException("ASI unavailable")));
+        var settings = Settings(); settings.Player.GodMode = true;
+        await checks.ThrowsAsync<InvalidOperationException>(() => provider.PushSettingsAsync(settings),
+            "GodMode must be rejected while neither provider announces readiness, without pinning an unvalidated owner.");
+        external.Ready = true;
+        await provider.PushSettingsAsync(settings);
+        await Task.Delay(1250);
+        var status = await provider.GetStatusAsync();
+        checks.That(status.SessionActive && status.AppliedRevision == status.DesiredRevision && status.Capabilities.Contains("player.godMode") &&
+            status.NativeClient is { Ready: false, TransportConnected: false },
+            "Repeated optional-module connection failures must not erase a memory-only applied session.");
+        await provider.SuicideAsync(provider.PlayerEpoch);
+        checks.That(external.Suicides == 1 && !external.OwnedGodMode,
+            "A missing ASI must not prevent the already implemented memory health action.");
+    }
+
+    private static async Task MemoryActionCancellationAsync(Checks checks)
+    {
+        var external = new MemoryProvider { Ready = true, ProcessId = 101 };
+        await using var pipe = new ModulePipe { NativeReady = false };
+        using var provider = new ClientModuleSession(external, () => 101, pipe.ConnectAsync);
+        await EventuallyAsync(() => Task.FromResult(pipe.Count(ClientModuleKind.Hello) == 1), "The waiting callback did not connect.");
+        var settings = Settings(); settings.Player.GodMode = true;
+        await provider.PushSettingsAsync(settings);
+        external.BlockNextSuicide();
+        using var cancel = new CancellationTokenSource();
+        Task pending = provider.SuicideAsync(cancel.Token);
+        await external.SuicideEntered.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        checks.That((await provider.GetStatusAsync()).AppliedRevision == 0,
+            "An older memory readback must not confirm the health action's disabling snapshot before restoration finishes.");
+        cancel.Cancel();
+        await checks.ThrowsAsync<OperationCanceledException>(() => pending,
+            "Canceling the caller must abort the pending external action without substituting a native action.");
+        checks.That((await provider.GetStatusAsync()).AppliedRevision == 0 && external.Suicides == 1,
+            "A canceled unobserved external action must remain unconfirmed and must have been dispatched only once.");
+        pipe.NativeReady = true;
+        await ReadyAsync(provider);
+        await Task.Delay(260);
+        checks.That(external.Suicides == 1 && pipe.Count(ClientModuleKind.Action) == 0 && pipe.Count(ClientModuleKind.Settings) == 0 &&
+            !(await provider.GetEventsAsync(0)).Events.Any(item => item.Type == "observed"),
+            "Connecting native execution after cancellation must not repeat the external action or invent a successful observation.");
+        pipe.ThrowIfFaulted();
+    }
+
     private static MenuSettings Settings()
     {
         var settings = new MenuSettings();
@@ -629,11 +806,16 @@ internal static class ClientModuleSessionChecks
     {
         private readonly object _gate = new();
         private readonly List<MenuSettings> _pushed = [];
-        private int _ready, _processId, _pushCount, _disconnects, _disposals, _blockPush;
+        private int _ready, _processId, _pushCount, _disconnects, _disposals, _blockPush, _blockSuicide;
+        private long _playerEpoch = 1;
         public bool Ready { get => Volatile.Read(ref _ready) != 0; set => Volatile.Write(ref _ready, value ? 1 : 0); }
         public int ProcessId { get => Volatile.Read(ref _processId); set => Volatile.Write(ref _processId, value); }
         public bool DetectionEnabled { get; set; } = true;
-        public long PlayerEpoch => 1;
+        public long PlayerEpoch { get => Interlocked.Read(ref _playerEpoch); set => Interlocked.Exchange(ref _playerEpoch, value); }
+        public bool SupportsMemoryGod { get; init; } = true;
+        public bool SupportsMemorySuicide { get; init; } = true;
+        public bool OwnedGodMode { get; private set; }
+        public long? LastSuicideEpoch { get; private set; }
         public int AppliedOffset { get; set; }
         public int Revives { get; private set; }
         public int Suicides { get; private set; }
@@ -643,7 +825,10 @@ internal static class ClientModuleSessionChecks
         public List<MenuSettings> Pushed { get { lock (_gate) return _pushed.Select(ExternalStateSerialization.Clone).ToList(); } }
         public TaskCompletionSource PushEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource ReleasePush { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SuicideEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSuicide { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public void BlockNextPush() => Interlocked.Exchange(ref _blockPush, 1);
+        public void BlockNextSuicide() => Interlocked.Exchange(ref _blockSuicide, 1);
         public Task<ServerStatus> GetStatusAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -652,7 +837,9 @@ internal static class ClientModuleSessionChecks
             {
                 Ready = Ready, PlayerOnline = Ready, PlayerId = Ready ? ProcessId : null,
                 DesiredRevision = revision, AppliedRevision = Math.Max(0, revision + AppliedOffset),
-                Capabilities = Ready ? ["aim.enabled", "esp.enabled", "weapons.noRecoil", "player.godMode", "player.suicide", "vehicle.lock", "vehicle.unlock", "silent"] : [],
+                Capabilities = Ready ? new[] { "aim.enabled", "esp.enabled", "weapons.noRecoil",
+                    SupportsMemoryGod ? "player.godMode" : "", SupportsMemorySuicide ? "player.suicide" : "" }
+                    .Where(name => name.Length != 0).ToArray() : [],
                 FeatureStates = [new() { Name = "player.godMode", State = "observed", Message = "memory sentinel" }],
                 Message = "memory provider mock"
             });
@@ -661,6 +848,7 @@ internal static class ClientModuleSessionChecks
         public async Task PushSettingsAsync(MenuSettings settings, CancellationToken cancellationToken = default)
         {
             lock (_gate) _pushed.Add(ExternalStateSerialization.Clone(settings));
+            OwnedGodMode = settings.Player.GodMode;
             Interlocked.Increment(ref _pushCount);
             if (Interlocked.Exchange(ref _blockPush, 0) != 0)
             {
@@ -670,8 +858,20 @@ internal static class ClientModuleSessionChecks
         }
         public Task ReviveAsync(CancellationToken cancellationToken = default) { Revives++; return Task.CompletedTask; }
         public Task ReviveAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) => ReviveAsync(cancellationToken);
-        public Task SuicideAsync(CancellationToken cancellationToken = default) { Suicides++; return Task.CompletedTask; }
-        public Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default) => SuicideAsync(cancellationToken);
+        public Task SuicideAsync(CancellationToken cancellationToken = default) => SuicideAsync(PlayerEpoch, cancellationToken);
+        public async Task SuicideAsync(long expectedPlayerEpoch, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (expectedPlayerEpoch != PlayerEpoch) throw new InvalidOperationException("Memory ped changed.");
+            Suicides++; LastSuicideEpoch = expectedPlayerEpoch;
+            if (Interlocked.Exchange(ref _blockSuicide, 0) != 0)
+            {
+                SuicideEntered.TrySetResult();
+                await ReleaseSuicide.Task.WaitAsync(cancellationToken);
+            }
+            if (expectedPlayerEpoch != PlayerEpoch) throw new InvalidOperationException("Memory ped changed.");
+            OwnedGodMode = false;
+        }
         public Task SetVehicleLockAsync(bool locked, CancellationToken cancellationToken = default) { VehicleActions++; return Task.CompletedTask; }
         public Task SetVehicleLockAsync(bool locked, long expectedPlayerEpoch, CancellationToken cancellationToken = default) => SetVehicleLockAsync(locked, cancellationToken);
         public Task DisconnectAsync(CancellationToken cancellationToken = default)

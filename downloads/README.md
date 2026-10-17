@@ -1,3 +1,13 @@
+# Zyon 3.3.3 — conexão automática
+
+[Pacote completo com runtime](ZyonMenu-v3.3.3-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.3-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.3-packages.json)
+
+Abra `ZyonMenu.exe`, sem escolher modo. Restaura o caminho de memória de GodMode e suicídio, antes retirado pelo programa quando o ASI não executava. Corrige a validação dos tamanhos Windows/PE e do cabeçalho transplantado pelo loader do FiveM. Não altera offsets por adivinhação.
+
+Feche o menu anterior e extraia em pasta nova. O ASI permanece idêntico ao da 3.3.2: se já está carregado, não reinstale para trocar apenas o aplicativo. **O callback nativo não executado no print continua sem causa confirmada; não há garantia de que noclip, revive, portas ou Silent Aim funcionem nessa cidade.** [Instruções](../zyon-v3/docs/automatic-connection-3.3.3.md).
+
+## Versões anteriores
+
 # Zyon 3.3.2 — varredura de armas e execução do módulo
 
 [Pacote completo com runtime](ZyonMenu-v3.3.2-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.2-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.2-packages.json)

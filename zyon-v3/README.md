@@ -1,33 +1,34 @@
-# Zyon 3.3.2 — módulo somente no cliente
+# Zyon 3.3.3 — conexão automática
 
-Versão de teste para Windows x64 e FiveM b3258. O executável inclui o módulo nativo `ZyonClient.asi` e oferece sua instalação na pasta local do FiveM. Nenhum recurso é instalado no servidor, e o modo **CLIENTE LOCAL** não verifica cargo de administrador ou a permissão ACE `zyon.modmenu`.
+Versão de teste para Windows x64 e FiveM b3258. O executável inclui o módulo nativo `ZyonClient.asi` e oferece sua instalação na pasta local do FiveM. Nenhum recurso é instalado no servidor, e o aplicativo não verifica cargo de administrador ou a permissão ACE `zyon.modmenu`.
 
 O módulo usa o carregamento oficial de plugins do FiveM. O servidor deve **já permitir ScriptHook/plugins e usar pure level abaixo de 2**. O aplicativo não altera essa política. O funcionamento real no Windows/FiveM ainda não foi validado.
 
 ## Abrir e atualizar
 
-1. Feche o FiveM e a versão anterior do menu. Extraia o [pacote completo](../downloads/ZyonMenu-v3.3.2-completo.zip) em uma pasta nova.
-2. Abra `ZyonMenu.exe` ou `Abrir-modulo-local.cmd`. Confira **3.3.2** e **CLIENTE LOCAL** no título. Se estiver no externo, o banner oferece **Usar cliente local**.
-3. Clique em **Preparar módulo** e selecione sua pasta `FiveM.app`. Repita esta etapa mesmo se já instalou a 3.3.1: o ASI separa a execução do callback da validação das natives. O seletor prioriza a instalação detectada no jogo.
-4. Abra o FiveM novamente, entre no servidor e aguarde o módulo conectado e suas capacidades aparecerem no menu.
-5. Teste uma função de cada vez e use **Salvar diagnóstico** para registrar o resultado.
+1. Feche a versão anterior do menu. Extraia o [pacote completo](../downloads/ZyonMenu-v3.3.3-completo.zip) em uma pasta nova.
+2. Abra `ZyonMenu.exe` ou `Abrir-Zyon.cmd`. O aplicativo detecta o FiveM b3258 e escolhe o caminho disponível para cada função, sem selecionar modo.
+3. O ASI é o mesmo da 3.3.2. Se ele já estava carregado, como no print enviado, não é preciso reinstalar a integração nem fechar o FiveM para trocar somente o aplicativo.
+4. Confira a situação individual das funções. **Verificar novamente** refaz a leitura das armas quando No Recoil/No Spread estão desativados e a restauração terminou.
 
-Somente `plugins/ZyonClient.asi` e seu registro de instalação são gravados na instalação do FiveM; uma versão anterior recebe backup `.bak`. A última pasta escolhida fica nas preferências locais do Zyon. O pacote completo inclui o runtime. O compacto requer .NET Desktop Runtime 8 x64. O modo externo permanece acessível com `ZyonMenu.exe --external` ou `Abrir-somente-externo.cmd`.
+GodMode e suicídio preservam o caminho de memória já existente quando ele está validado. O proprietário de GodMode permanece fixo durante o processo para evitar dois provedores alterando a mesma proteção. Falhas de comunicação com o módulo não apagam uma sessão que usa somente memória. Reviver, noclip, invisibilidade, munição, portas e Silent Aim continuam exigindo execução nativa confirmada.
 
-A varredura de assinaturas lê seções grandes em blocos e tenta páginas menores quando um bloco não pode ser lido. Candidatos em uma análise incompleta não habilitam os campos. Com No Recoil e No Spread desativados e a restauração concluída, **Verificar novamente** refaz a análise após entrar na cidade. A mensagem do módulo distingue callback nunca executado, callback parado e falha específica de validação. Essas correções não comprovam que o bloqueio mostrado no print foi resolvido.
+Se a integração ainda não estiver instalada, **Conexão → Configurar integração** oferece o instalador, com FiveM fechado. O botão deixa de aparecer no cabeçalho quando a instalação já corresponde à imagem embutida ou o módulo já comunicou. Ele permanece disponível para manutenção na aba Conexão. A interface descreve conexão parcial quando há funções de memória disponíveis e a integração nativa não executa.
 
-O banner fica visível em todas as abas e distingue arquivo ausente/desatualizado, outra build, várias sessões, arquivo instalado sem confirmação de carregamento e erro do runtime nativo. Os cartões de personagem e veículo mostram o bloqueio atual. Uma conexão de memória não habilita operações nativas. Consulte [carregamento e recuperação](docs/client-module-3.3.2.md).
+A leitura PE valida separadamente o tamanho registrado pelo Windows e o declarado no cabeçalho GTA copiado pelo loader do FiveM. Seções devem caber integralmente nos dois limites. Cabeçalhos transplantados não são rejeitados apenas por tamanhos diferentes; valores inválidos e leitura incompleta continuam bloqueando os campos. Consulte [correções e limites](docs/automatic-connection-3.3.3.md).
+
+O pacote completo inclui o runtime. O compacto requer .NET Desktop Runtime 8 x64. A integração grava somente `plugins/ZyonClient.asi` e seu registro na instalação do FiveM, com backup de versões anteriores. Nenhum arquivo é instalado no servidor.
 
 ## Funções implementadas para teste
 
 | Função | Caminho e limite nesta versão |
 | --- | --- |
-| GodMode | Módulo nativo; no modo `--external`, bit de invulnerabilidade já existente |
+| GodMode | Seleção automática de um proprietário por processo, preservando o caminho de memória validado |
 | Noclip / voar | Módulo nativo por quadro, personagem a pé e com controle local; velocidade 1–50 m/s |
 | Invisibilidade | Módulo nativo com estado anterior preservado |
 | Freeze Ammo | Módulo nativo, com leitura da arma e munição |
 | Reviver | Ressurreição nativa; não limpa morte/hospital de ESX/QBCore |
-| Suicídio | Módulo nativo; no modo externo, escrita de vida zero com readback e proteção contra alvo substituído |
+| Suicídio | Ação de memória quando disponível ou ação nativa confirmada; validação do personagem e nenhuma repetição automática |
 | Bloquear / desbloquear carro | Veículo ocupado ou o mais próximo em até 8 m; exige controle de rede e confirmação das portas; não concede chaves de frameworks |
 | Silent Aim experimental | Protótipo com `SET_PED_SHOOTS_AT_COORD`; sem confirmação de redirecionamento ou acerto; somente no módulo local |
 | Aim, ESP, No Recoil e No Spread | Backend de memória b3258 existente, condicionado às leituras e assinaturas válidas |

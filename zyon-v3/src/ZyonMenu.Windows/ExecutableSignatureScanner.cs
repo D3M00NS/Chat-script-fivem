@@ -32,31 +32,65 @@ internal static class ExecutableSignatureScanner
         ArgumentNullException.ThrowIfNull(read);
         var result = new ExecutableSignatureScanResult();
         var telemetry = result.Telemetry;
+        telemetry.ModuleBase = moduleBase;
         telemetry.ImageSize = imageSize;
         if (imageSize < 64 || imageSize > MaximumImageSize || moduleBase < 0x10000 ||
             moduleBase > 0x00007FFFFFFFFFFF || imageSize - 1UL > 0x00007FFFFFFFFFFF - moduleBase)
             return Failure("O intervalo do módulo está fora dos limites de análise.");
 
         if (!ReadImage(0, 64, out var dos)) return Failure("O cabeçalho DOS não pôde ser lido.");
+        telemetry.DosHeaderRead = true;
+        telemetry.HeaderBytesRead += dos.Length;
         if (dos[0] != 'M' || dos[1] != 'Z') return Failure("O cabeçalho MZ do executável não foi confirmado.");
+        telemetry.DosPeOffset = BinaryPrimitives.ReadUInt32LittleEndian(dos.AsSpan(0x3C, 4));
         int pe = BinaryPrimitives.ReadInt32LittleEndian(dos.AsSpan(0x3C, 4));
-        if (pe < 64 || pe > MaximumHeaderSize - 24 || !ReadImage((uint)pe, 24, out var coff))
-            return Failure("O endereço ou a leitura do cabeçalho PE é inválido.");
-        if (BinaryPrimitives.ReadUInt32LittleEndian(coff) != 0x00004550 ||
-            BinaryPrimitives.ReadUInt16LittleEndian(coff.AsSpan(4, 2)) != 0x8664)
+        if (pe < 64 || pe > MaximumHeaderSize - 24)
+            return Failure($"O endereço PE declarado no DOS está fora do limite de cabeçalho: 0x{telemetry.DosPeOffset:X}.");
+        if (!ReadImage((uint)pe, 24, out var coff)) return Failure("O cabeçalho COFF do executável não pôde ser lido.");
+        telemetry.CoffHeaderRead = true;
+        telemetry.HeaderBytesRead += coff.Length;
+        telemetry.PeSignature = BinaryPrimitives.ReadUInt32LittleEndian(coff);
+        telemetry.Machine = BinaryPrimitives.ReadUInt16LittleEndian(coff.AsSpan(4, 2));
+        if (telemetry.PeSignature != 0x00004550 || telemetry.Machine != 0x8664)
             return Failure("O cabeçalho PE x64 do executável não foi confirmado.");
         int sectionCount = BinaryPrimitives.ReadUInt16LittleEndian(coff.AsSpan(6, 2));
         int optionalSize = BinaryPrimitives.ReadUInt16LittleEndian(coff.AsSpan(20, 2));
         int tableSize = sectionCount * 40;
         int tableEnd = pe + 24 + optionalSize + tableSize;
-        if (sectionCount is < 1 or > 96 || optionalSize < 112 || tableEnd > MaximumHeaderSize ||
-            !ReadImage((uint)(pe + 24), optionalSize + tableSize, out var headers))
-            return Failure("O tamanho ou a leitura da tabela de seções PE é inválido.");
+        telemetry.DeclaredSectionCount = sectionCount;
+        telemetry.DeclaredOptionalHeaderSize = optionalSize;
+        telemetry.SectionTableOffset = pe + 24 + optionalSize;
+        telemetry.SectionTableEnd = tableEnd;
+        if (sectionCount is < 1 or > 96 || optionalSize < 112 || tableEnd > MaximumHeaderSize)
+            return Failure($"A tabela PE tem tamanho inválido: {sectionCount} seções, cabeçalho opcional {optionalSize}, fim 0x{tableEnd:X}.");
+        if (!ReadImage((uint)(pe + 24), optionalSize + tableSize, out var headers))
+            return Failure("O cabeçalho opcional e a tabela de seções PE não puderam ser lidos por completo.");
+        telemetry.OptionalHeaderAndSectionTableRead = true;
+        telemetry.HeaderBytesRead += headers.Length;
         uint declaredImageSize = BinaryPrimitives.ReadUInt32LittleEndian(headers.AsSpan(56, 4));
         uint headersSize = BinaryPrimitives.ReadUInt32LittleEndian(headers.AsSpan(60, 4));
-        if (BinaryPrimitives.ReadUInt16LittleEndian(headers) != 0x020B || declaredImageSize != imageSize ||
-            headersSize < tableEnd || headersSize > imageSize)
-            return Failure("O cabeçalho PE32+ ou os limites da imagem não correspondem ao módulo carregado.");
+        telemetry.OptionalHeaderMagic = BinaryPrimitives.ReadUInt16LittleEndian(headers);
+        telemetry.DeclaredImageSize = declaredImageSize;
+        telemetry.DeclaredHeadersSize = headersSize;
+        if (telemetry.OptionalHeaderMagic != 0x020B)
+            return Failure($"O cabeçalho opcional não é PE32+: magic 0x{telemetry.OptionalHeaderMagic:X}, esperado 0x20B.");
+        if (declaredImageSize < 64 || declaredImageSize > MaximumImageSize ||
+            declaredImageSize - 1UL > 0x00007FFFFFFFFFFF - moduleBase)
+            return Failure($"O SizeOfImage PE está fora dos limites de análise: 0x{declaredImageSize:X}; tamanho Windows 0x{imageSize:X}.");
+
+        // FiveM's ExecutableLoader copies the GTA NT header and section table into the
+        // host's DOS e_lfanew location. Neither the Windows loader's recorded extent nor
+        // the host DOS offset must equal those of the copied GTA image. Use both bounds
+        // independently, and protect the actual table as well as SizeOfHeaders.
+        uint effectiveSize = Math.Min(imageSize, declaredImageSize);
+        uint protectedHeadersSize = Math.Max(headersSize, (uint)tableEnd);
+        telemetry.EffectiveImageSize = effectiveSize;
+        telemetry.ProtectedHeaderSize = protectedHeadersSize;
+        telemetry.ImageBoundsReason = imageSize == declaredImageSize
+            ? $"Tamanhos Windows e PE iguais: 0x{imageSize:X}."
+            : $"Tamanhos distintos: Windows 0x{imageSize:X}, PE 0x{declaredImageSize:X}; análise limitada a 0x{effectiveSize:X}.";
+        if (headersSize < 64 || protectedHeadersSize > effectiveSize)
+            return Failure($"Cabeçalhos fora do intervalo comum: SizeOfHeaders 0x{headersSize:X}, fim real da tabela 0x{tableEnd:X}, limite 0x{effectiveSize:X}.");
 
         var ranges = new List<(uint Start, uint Size)>();
         for (int index = 0; index < sectionCount; index++)
@@ -68,9 +102,10 @@ internal static class ExecutableSignatureScanner
             uint size = Math.Max(virtualSize, rawSize);
             bool executable = (BinaryPrimitives.ReadUInt32LittleEndian(entry.Slice(36, 4)) & 0x20000000) != 0;
             if (size == 0 && !executable) continue;
-            if (size == 0 || rva < headersSize || rva > imageSize || size > imageSize - rva ||
-                ranges.Any(range => (ulong)rva < (ulong)range.Start + range.Size && (ulong)range.Start < (ulong)rva + size))
-                return Failure("Uma seção PE tem limites inválidos ou sobrepostos; nenhum campo foi autorizado.");
+            if (size == 0 || rva < protectedHeadersSize || rva > effectiveSize || size > effectiveSize - rva)
+                return Failure($"Seção PE {index}: RVA 0x{rva:X}, tamanho 0x{size:X}, cabeçalhos até 0x{protectedHeadersSize:X}; limites Windows 0x{imageSize:X} e PE 0x{declaredImageSize:X}. A seção inteira precisa caber nos dois limites.");
+            if (ranges.Any(range => (ulong)rva < (ulong)range.Start + range.Size && (ulong)range.Start < (ulong)rva + size))
+                return Failure($"A seção PE {index} se sobrepõe a outra seção; nenhum campo foi autorizado.");
             ranges.Add((rva, size));
             if (!executable) continue;
             int nameEnd = entry[..8].IndexOf((byte)0);

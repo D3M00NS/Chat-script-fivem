@@ -27,6 +27,68 @@ internal static class ExecutableSignatureScannerChecks
             "Large sections must use bounded requests and count every executable byte once.");
         Check(scan.Telemetry.Sections[0].Name == ".text" && scan.Telemetry.Sections[0].VirtualSize == large.SectionSize,
             "The report must retain section layout for diagnosing the actual loaded PE image.");
+        Check(scan.Telemetry.ModuleBase == ImageFixture.Base && scan.Telemetry.ImageSize == large.Bytes.Length &&
+            scan.Telemetry.DeclaredImageSize == large.Bytes.Length && scan.Telemetry.OptionalHeaderMagic == 0x20B &&
+            scan.Telemetry.DosPeOffset == ImageFixture.Pe && scan.Telemetry.Machine == 0x8664 &&
+            scan.Telemetry.PeSignature == 0x00004550,
+            "Raw header facts must identify both image extents, DOS PE offset, PE signature, machine and optional magic.");
+        Check(scan.Telemetry.DosHeaderRead && scan.Telemetry.CoffHeaderRead && scan.Telemetry.OptionalHeaderAndSectionTableRead &&
+            scan.Telemetry.DeclaredSectionCount == 1 && scan.Telemetry.DeclaredOptionalHeaderSize == 240 &&
+            scan.Telemetry.SectionTableOffset == ImageFixture.Optional + 240 &&
+            scan.Telemetry.SectionTableEnd == ImageFixture.Optional + 280 &&
+            scan.Telemetry.HeaderBytesRead == 64 + 24 + 280,
+            "The report must retain successful header reads and the actual section-table extent.");
+
+        var smallerPe = new ImageFixture(8192);
+        smallerPe.SetSectionUInt32(0, 8, 4096);
+        smallerPe.SetSectionUInt32(0, 16, 4096);
+        smallerPe.Write32(ImageFixture.Optional + 56, (uint)smallerPe.FirstSection + 4096);
+        smallerPe.Recoil(smallerPe.FirstSection + 128, 0x80);
+        scan = smallerPe.Scan();
+        Check(scan.Telemetry.Complete && scan.RecoilOffset == 0x80 && scan.Telemetry.BytesRead == 4096,
+            "A copied PE image smaller than the Windows host extent must be accepted when its whole section fits both bounds.");
+        Check(scan.Telemetry.ImageSize == smallerPe.Bytes.Length && scan.Telemetry.DeclaredImageSize == 8192 &&
+            scan.Telemetry.EffectiveImageSize == 8192 && smallerPe.LastReadEnd <= ImageFixture.Base + 8192 &&
+            scan.Telemetry.ImageBoundsReason.Contains("distintos"),
+            "Different host/PE extents must be retained; reads must remain inside their intersection.");
+
+        var largerPe = new ImageFixture(4096);
+        largerPe.Write32(ImageFixture.Optional + 56, (uint)largerPe.Bytes.Length + 4096);
+        largerPe.Recoil(largerPe.FirstSection + 128, 0x90);
+        scan = largerPe.Scan();
+        Check(scan.Telemetry.Complete && scan.RecoilOffset == 0x90 && scan.Telemetry.BytesRead == 4096,
+            "A larger copied PE SizeOfImage must not invalidate a complete executable section within the host extent.");
+        Check(scan.Telemetry.DeclaredImageSize == largerPe.Bytes.Length + 4096 &&
+            scan.Telemetry.EffectiveImageSize == largerPe.Bytes.Length && largerPe.OutOfFixtureReadAttempts == 0 &&
+            largerPe.LastReadEnd <= ImageFixture.Base + (uint)largerPe.Bytes.Length,
+            "A larger PE declaration must never extend the reader past the observed Windows host bounds.");
+
+        var truncatedHost = new ImageFixture(8192);
+        truncatedHost.Recoil(truncatedHost.FirstSection + 128, 0x80);
+        uint observedSize = (uint)truncatedHost.Bytes.Length - 4096;
+        scan = truncatedHost.Scan(observedSize);
+        Check(!scan.Telemetry.Complete && scan.RecoilOffset is null && scan.Telemetry.BytesRead == 0,
+            "An executable section crossing the host bound must fail before scanning, even when its initial candidate is readable.");
+        Check(truncatedHost.LastReadEnd <= ImageFixture.Base + observedSize &&
+            scan.Telemetry.CoverageReason.Contains("Windows") && scan.Telemetry.CoverageReason.Contains("PE"),
+            "A truncated section must not cause out-of-host reads or a misleading generic size mismatch.");
+
+        var transferredHeader = new ImageFixture(4096, 1, 0xF00);
+        transferredHeader.Write32(transferredHeader.OptionalOffset + 60, 4096);
+        transferredHeader.Recoil(transferredHeader.FirstSection + 128, 0xA0);
+        scan = transferredHeader.Scan();
+        Check(scan.Telemetry.Complete && scan.RecoilOffset == 0xA0 &&
+            scan.Telemetry.DeclaredHeadersSize < scan.Telemetry.SectionTableEnd,
+            "A transplanted NT header at the host DOS offset can place the actual section table beyond copied SizeOfHeaders.");
+        Check(scan.Telemetry.ProtectedHeaderSize == scan.Telemetry.SectionTableEnd &&
+            scan.Telemetry.DosPeOffset == 0xF00 && scan.Telemetry.HeaderBytesRead == 368,
+            "Transferred headers must protect their actual table and retain the distinct declared header size.");
+        var tableOverlap = new ImageFixture(4096, 1, 0xF00);
+        tableOverlap.Write32(tableOverlap.OptionalOffset + 60, 4096);
+        tableOverlap.SetSectionUInt32(0, 12, 4096);
+        scan = tableOverlap.Scan();
+        Check(!scan.Telemetry.Complete && scan.RecoilOffset is null && scan.Telemetry.BytesRead == 0,
+            "A section overlapping the actual transferred table must fail even when it begins after copied SizeOfHeaders.");
 
         var boundary = new ImageFixture(3 * 65536);
         // This shorter pattern remains entirely inside the carry from the first block.
@@ -117,13 +179,29 @@ internal static class ExecutableSignatureScannerChecks
         Invalid(image => image.Write16(ImageFixture.Pe + 6, 0), "No declared sections");
         Invalid(image => image.Write16(ImageFixture.Pe + 20, 100), "Truncated optional header");
         Invalid(image => image.Write16(ImageFixture.Optional, 0x10B), "Non-PE32+ optional header");
-        Invalid(image => image.Write32(ImageFixture.Optional + 56, (uint)image.Bytes.Length - 1), "Mismatched image size");
-        Invalid(image => image.Write32(ImageFixture.Optional + 60, 64), "Section table outside declared headers");
+        Invalid(image => image.Write32(ImageFixture.Optional + 56, (uint)image.Bytes.Length - 1), "Section truncated by copied PE extent");
+        Invalid(image => image.Write32(ImageFixture.Optional + 56, 0), "Zero PE image size");
+        Invalid(image => image.Write32(ImageFixture.Optional + 56, uint.MaxValue), "Unbounded PE image size");
+        Invalid(image => image.Write32(ImageFixture.Optional + 60, 63), "Truncated declared headers");
+        Invalid(image => image.Write32(ImageFixture.Optional + 60, (uint)image.Bytes.Length + 1), "Headers outside image bounds");
         Invalid(image => image.SetSectionUInt32(0, 12, (uint)image.Bytes.Length - 1), "Section beyond image end");
         Invalid(image => image.SetSectionUInt32(0, 12, 0), "Section overlaps headers");
         Invalid(image => { image.SetSectionUInt32(0, 8, 0); image.SetSectionUInt32(0, 16, 0); }, "Empty executable section");
         Invalid(image => image.SetSectionUInt32(0, 36, 0x40000040), "No executable section");
         Invalid(image => image.Refuse = (address, _) => address == ImageFixture.Base, "Unreadable DOS header");
+        var wrongMagic = new ImageFixture(4096);
+        wrongMagic.Write16(ImageFixture.Optional, 0x10B);
+        scan = wrongMagic.Scan();
+        Check(scan.Telemetry.OptionalHeaderMagic == 0x10B && scan.Telemetry.OptionalHeaderAndSectionTableRead &&
+            scan.Telemetry.CoverageReason.Contains("magic 0x10B"),
+            "An invalid optional magic must retain the observed value and identify that exact failed check.");
+        var unreadableTable = new ImageFixture(4096);
+        unreadableTable.Refuse = (address, _) => address == ImageFixture.Base + ImageFixture.Optional;
+        scan = unreadableTable.Scan();
+        Check(scan.Telemetry.DosHeaderRead && scan.Telemetry.CoffHeaderRead &&
+            !scan.Telemetry.OptionalHeaderAndSectionTableRead && scan.Telemetry.OptionalHeaderMagic is null &&
+            scan.Telemetry.HeaderBytesRead == 88,
+            "Unavailable optional/table bytes must remain distinct from successfully read but invalid PE values.");
         var overlap = new ImageFixture(4096, 2);
         overlap.SetSectionUInt32(1, 12, (uint)overlap.FirstSection + 2048);
         Check(!overlap.Scan().Telemetry.Complete && overlap.Scan().RecoilOffset is null,
@@ -164,27 +242,32 @@ internal static class ExecutableSignatureScannerChecks
         public byte[] Bytes { get; }
         public uint SectionSize { get; }
         public int FirstSection { get; }
+        public int PeOffset { get; }
+        public int OptionalOffset => PeOffset + 24;
         public int LargestRead { get; private set; }
+        public ulong LastReadEnd { get; private set; }
+        public int OutOfFixtureReadAttempts { get; private set; }
         public Func<ulong, int, bool>? Refuse { get; set; }
 
-        public ImageFixture(int sectionSize, int count = 1)
+        public ImageFixture(int sectionSize, int count = 1, int peOffset = Pe)
         {
+            PeOffset = peOffset;
             SectionSize = (uint)sectionSize;
-            int tableEnd = Optional + OptionalSize + count * 40;
+            int tableEnd = OptionalOffset + OptionalSize + count * 40;
             FirstSection = (tableEnd + 4095) & ~4095;
             Bytes = new byte[FirstSection + sectionSize * count];
             Bytes[0] = (byte)'M'; Bytes[1] = (byte)'Z';
-            Write32(0x3C, Pe);
-            Write32(Pe, 0x00004550);
-            Write16(Pe + 4, 0x8664);
-            Write16(Pe + 6, (ushort)count);
-            Write16(Pe + 20, OptionalSize);
-            Write16(Optional, 0x20B);
-            Write32(Optional + 56, (uint)Bytes.Length);
-            Write32(Optional + 60, (uint)FirstSection);
+            Write32(0x3C, (uint)PeOffset);
+            Write32(PeOffset, 0x00004550);
+            Write16(PeOffset + 4, 0x8664);
+            Write16(PeOffset + 6, (ushort)count);
+            Write16(PeOffset + 20, OptionalSize);
+            Write16(OptionalOffset, 0x20B);
+            Write32(OptionalOffset + 56, (uint)Bytes.Length);
+            Write32(OptionalOffset + 60, (uint)FirstSection);
             for (int index = 0; index < count; index++)
             {
-                ".text"u8.CopyTo(Bytes.AsSpan(Optional + OptionalSize + index * 40));
+                ".text"u8.CopyTo(Bytes.AsSpan(OptionalOffset + OptionalSize + index * 40));
                 SetSectionUInt32(index, 8, (uint)sectionSize);
                 SetSectionUInt32(index, 12, (uint)(FirstSection + index * sectionSize));
                 SetSectionUInt32(index, 16, (uint)sectionSize);
@@ -194,18 +277,24 @@ internal static class ExecutableSignatureScannerChecks
 
         public void Write16(int index, ushort value) => BinaryPrimitives.WriteUInt16LittleEndian(Bytes.AsSpan(index), value);
         public void Write32(int index, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(Bytes.AsSpan(index), value);
-        public void SetSectionUInt32(int index, int field, uint value) => Write32(Optional + OptionalSize + index * 40 + field, value);
+        public void SetSectionUInt32(int index, int field, uint value) => Write32(OptionalOffset + OptionalSize + index * 40 + field, value);
         public void Recoil(int index, int value) => RecoilBytes(value).CopyTo(Bytes, index);
         public void Spread(int index, byte value) => new byte[]
             { 0xF3, 0x0F, 0x10, 0x43, value, 0xF3, 0x0F, 0x59, 0x05, 0, 0, 0, 0, 0xF3, 0x0F, 0x2C, 0xC0 }.CopyTo(Bytes, index);
-        public ExecutableSignatureScanResult Scan() => ExecutableSignatureScanner.Scan(Base, (uint)Bytes.Length, Read);
+        public ExecutableSignatureScanResult Scan(uint? observedSize = null) => ExecutableSignatureScanner.Scan(Base, observedSize ?? (uint)Bytes.Length, Read);
 
         public bool Read(ulong address, int length, out byte[] bytes)
         {
             LargestRead = Math.Max(LargestRead, length);
+            if (length > 0) LastReadEnd = Math.Max(LastReadEnd, address + (uint)length);
             bytes = [];
             if (address < Base || length <= 0 || address - Base > (ulong)Bytes.Length ||
-                (ulong)length > (ulong)Bytes.Length - (address - Base) || Refuse?.Invoke(address, length) == true) return false;
+                (ulong)length > (ulong)Bytes.Length - (address - Base))
+            {
+                OutOfFixtureReadAttempts++;
+                return false;
+            }
+            if (Refuse?.Invoke(address, length) == true) return false;
             bytes = Bytes.AsSpan((int)(address - Base), length).ToArray();
             return true;
         }
