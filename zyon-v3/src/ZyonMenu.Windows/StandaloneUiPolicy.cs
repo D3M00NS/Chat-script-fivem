@@ -32,18 +32,20 @@ internal sealed class StandaloneUiPolicy
 
     public static bool CanEditConfiguration(string capability, bool clientCapabilitiesKnown, ISet<string> clientCapabilities)
     {
-        if (capability is "silent" or "player.revive") return false;
+        if (!HasExternalImplementation(capability)) return false;
         if (clientCapabilitiesKnown) return clientCapabilities.Contains(capability);
         return capability is "aim" or "aim.playersOnly" or "esp" or "esp.boxes" or "esp.skeletons" or "esp.distance" or "esp.playersOnly" or
             "player.godMode" or "weapons.noRecoil" or "weapons.noSpread";
     }
 
     public static bool CanInvokeAction(string capability, bool healthy, bool ready, bool localPlayerReady,
-        bool sessionActive, ISet<string> clientCapabilities, bool nativeExecutionReady = true)
+        bool sessionActive, ISet<string> clientCapabilities)
     {
-        bool requiresNative = capability is "player.revive" or "player.noclip" or "player.invisible" or
-            "weapons.freezeAmmo" or "silent" or "vehicle.lock" or "vehicle.unlock";
-        return healthy && ready && localPlayerReady && sessionActive && clientCapabilities.Contains(capability) &&
-            (!requiresNative || nativeExecutionReady);
+        return HasExternalImplementation(capability) && healthy && ready && localPlayerReady && sessionActive &&
+            clientCapabilities.Contains(capability);
     }
+
+    private static bool HasExternalImplementation(string capability) => capability is
+        "aim" or "aim.playersOnly" or "esp" or "esp.boxes" or "esp.skeletons" or "esp.distance" or "esp.playersOnly" or
+        "player.godMode" or "player.suicide" or "weapons.noRecoil" or "weapons.noSpread";
 }

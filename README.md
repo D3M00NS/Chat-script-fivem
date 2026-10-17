@@ -1,9 +1,9 @@
 # Chat-script-fivem
 
-[Zyon 3.3.3 — baixar pacote completo](downloads/ZyonMenu-v3.3.3-completo.zip) · [Fontes e instruções](zyon-v3/README.md) · [Validação](zyon-v3/docs/VALIDACAO.md)
+[Zyon 3.4.0 — baixar pacote completo](downloads/ZyonMenu-v3.4.0-completo.zip) · [Instruções](zyon-v3/README.md) · [Validação](zyon-v3/docs/VALIDACAO.md)
 
-Versão de teste Windows x64/FiveM b3258 com módulo instalado somente no cliente pelo próprio executável. Não exige cargo de administrador ou recurso no servidor; o servidor precisa já permitir plugins/ScriptHook e usar pure level abaixo de 2.
+Aplicativo externo para Windows x64/FiveM b3258. A 3.4.0 remove a dependência de ScriptHook e do cliente ASI: inicia diretamente com o leitor de memória, sem instalação ou conexão a plugins. O executável não contém o ASI, o instalador nem o provider nativo das versões anteriores.
 
-Mantém GodMode, noclip/voar, invisibilidade, munição, suicídio e revive nativo. Acrescenta ações de portas do veículo e um protótipo experimental de Silent Aim, que pode não produzir tiro ou acerto. Não identifica ADMs nem limpa o estado médico ESX/QBCore. O comportamento real no Windows/FiveM ainda não foi validado.
+Mantém as implementações externas de Aim, ESP, GodMode, No Recoil/No Spread e escrita de vida zero após confirmação. Disponibilidade depende da leitura e validação do processo; cobertura incompleta continua bloqueando campos de arma. **Noclip, revive, invisibilidade, Freeze Ammo, Silent Aim e portas não têm implementação externa nesta versão.**
 
-Abra `ZyonMenu.exe`: a conexão é automática, sem escolher entre modos. A versão 3.3.3 recupera o caminho de memória para GodMode e suicídio quando disponível, sem depender da execução do ASI, e corrige a validação de cabeçalhos transplantados pelo loader do FiveM. O módulo da 3.3.2 permanece igual; se já está carregado, basta atualizar o executável. **Isso não confirma que noclip, revive, portas ou Silent Aim passaram a executar no servidor do print.** [Detalhes](zyon-v3/docs/automatic-connection-3.3.3.md).
+Para desativar o módulo Zyon instalado anteriormente, feche o FiveM e use **Conexão → Remover integração antiga**. O aplicativo renomeia somente o `ZyonClient.asi` de releases conhecidas para uma cópia `.disabled`. Arquivos do FiveM e outros plugins são preservados.

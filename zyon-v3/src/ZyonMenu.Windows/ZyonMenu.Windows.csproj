@@ -9,18 +9,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>ZyonMenu</AssemblyName>
     <RootNamespace>ZyonMenu.Windows</RootNamespace>
-    <Version>3.3.3</Version>
-    <AssemblyVersion>3.3.3.0</AssemblyVersion>
-    <FileVersion>3.3.3.0</FileVersion>
+    <Version>3.4.0</Version>
+    <AssemblyVersion>3.4.0.0</AssemblyVersion>
+    <FileVersion>3.4.0.0</FileVersion>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../ZyonMenu.Core/ZyonMenu.Core.csproj" />
-    <EmbeddedResource Include="../../native/zyon-client/dist/ZyonClient.asi"
-                      LogicalName="ZyonMenu.ClientModule.asi"
-                      Condition="Exists('../../native/zyon-client/dist/ZyonClient.asi')" />
+    <!-- Legacy plugin sources remain in the repository for historical tests only. -->
+    <Compile Remove="ClientModule*.cs" />
   </ItemGroup>
-  <Target Name="RequireClientModule" BeforeTargets="BeforeBuild"
-          Condition="'$(RequireClientModuleAsset)' == 'true' and !Exists('../../native/zyon-client/dist/ZyonClient.asi')">
-    <Error Text="Build native/zyon-client before publishing the client-module package." />
-  </Target>
 </Project>

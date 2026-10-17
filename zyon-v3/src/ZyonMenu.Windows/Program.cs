@@ -11,15 +11,13 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         bool requestAdministration = args.Contains("--admin", StringComparer.OrdinalIgnoreCase);
         bool explicitClientModule = args.Contains("--client-module", StringComparer.OrdinalIgnoreCase);
-        bool requestExternal = args.Contains("--external", StringComparer.OrdinalIgnoreCase);
-        if (requestAdministration && explicitClientModule || requestExternal && (requestAdministration || explicitClientModule))
+        if (explicitClientModule)
         {
-            MessageBox.Show("Escolha apenas um modo ao iniciar o menu.", "Zyon", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("A integração antiga foi retirada. Abra ZyonMenu.exe normalmente; esta versão usa o backend externo.",
+                "Zyon", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
-        bool requestClientModule = !requestAdministration && !requestExternal;
-        var mode = requestAdministration ? LocalMenuMode.Administration : requestExternal
-            ? LocalMenuMode.External : LocalMenuMode.ClientModule;
+        var mode = requestAdministration ? LocalMenuMode.Administration : LocalMenuMode.External;
         using var instance = StandaloneInstance.Acquire();
         if (!instance.IsOwner)
         {
@@ -39,14 +37,6 @@ internal static class Program
             Application.Run(new AdminMainForm());
             return;
         }
-        while (true)
-        {
-            using var menu = new MainForm(requestClientModule ? new ClientModuleSession() : null);
-            Application.Run(menu);
-            if (!menu.ClientModuleRequested) break;
-            // The closed form has stopped and disposed its old provider before
-            // opening the client module. Keep this process's existing mutex.
-            requestClientModule = true;
-        }
+        Application.Run(new MainForm());
     }
 }

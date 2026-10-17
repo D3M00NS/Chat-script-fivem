@@ -1,3 +1,13 @@
+# Zyon 3.4.0 — sem ScriptHook/ASI
+
+[Pacote completo com runtime](ZyonMenu-v3.4.0-completo.zip) · [Pacote compacto](ZyonMenu-v3.4.0-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.4.0-packages.json)
+
+Executável externo sem ASI embutido, instalador ou conexão ao plugin. Abra `ZyonMenu.exe` normalmente. Para desativar o módulo antigo, feche o FiveM e use **Conexão → Remover integração antiga**; somente o `ZyonClient.asi` conhecido é preservado como `.disabled`.
+
+Mantém as implementações externas existentes. **Noclip, revive, invisibilidade, Freeze Ammo, Silent Aim e portas ficam indisponíveis, pois não possuem implementação externa.** As leituras de arma incompletas continuam bloqueadas. [Instruções](../zyon-v3/README.md).
+
+## Versões anteriores
+
 # Zyon 3.3.3 — conexão automática
 
 [Pacote completo com runtime](ZyonMenu-v3.3.3-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.3-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.3-packages.json)

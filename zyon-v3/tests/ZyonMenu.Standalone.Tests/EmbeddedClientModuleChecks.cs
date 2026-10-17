@@ -6,6 +6,44 @@ namespace ZyonMenu.Standalone.Tests;
 
 internal static class EmbeddedClientModuleChecks
 {
+    public static int VerifyExternalOnly(string managedAssembly)
+    {
+        try
+        {
+            using var input = File.OpenRead(managedAssembly);
+            using var pe = new PEReader(input);
+            var metadata = pe.GetMetadataReader();
+            foreach (var handle in metadata.ManifestResources)
+            {
+                string name = metadata.GetString(metadata.GetManifestResource(handle).Name);
+                if (name.EndsWith(".asi", StringComparison.OrdinalIgnoreCase) || name == "ZyonMenu.ClientModule.asi")
+                    throw new InvalidDataException("The external build must not contain an ASI payload.");
+            }
+            foreach (var handle in metadata.TypeDefinitions)
+            {
+                var definition = metadata.GetTypeDefinition(handle);
+                if (metadata.GetString(definition.Namespace) == "ZyonMenu.Windows" &&
+                    metadata.GetString(definition.Name).StartsWith("ClientModule", StringComparison.Ordinal))
+                    throw new InvalidDataException("The external build still contains a client-module implementation.");
+            }
+            foreach (var handle in metadata.MethodDefinitions)
+            {
+                var method = metadata.GetMethodDefinition(handle);
+                if ((method.Attributes & System.Reflection.MethodAttributes.PinvokeImpl) == 0) continue;
+                string module = metadata.GetString(metadata.GetModuleReference(method.GetImport().Module).Name);
+                if (module.Contains("scripthook", StringComparison.OrdinalIgnoreCase) || module.EndsWith(".asi", StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidDataException("The external build still imports a plugin runtime.");
+            }
+            Console.WriteLine("PASS external build: no ASI payload, client-module implementation or plugin imports.");
+            return 0;
+        }
+        catch (Exception error) when (error is IOException or InvalidDataException or BadImageFormatException or InvalidOperationException or ArgumentException)
+        {
+            Console.Error.WriteLine("FAIL external build: " + error.Message);
+            return 1;
+        }
+    }
+
     // Inspect metadata and resource bytes without loading Windows code.
     public static int Verify(string managedAssembly, string nativeModule)
     {

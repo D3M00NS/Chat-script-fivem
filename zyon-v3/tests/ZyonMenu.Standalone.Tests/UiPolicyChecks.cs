@@ -23,16 +23,23 @@ internal static class UiPolicyChecks
         Check(!StandaloneUiPolicy.CanInvokeAction("player.revive", true, true, true, true, capabilities), "Revive must not claim missing implementation.");
         var reviveCapabilities = new HashSet<string>(new[] { "player.revive" }, StringComparer.OrdinalIgnoreCase);
         Check(!StandaloneUiPolicy.CanInvokeAction("player.revive", true, true, false, false, reviveCapabilities), "Implemented actions must remain blocked until an actual player session exists.");
-        Check(StandaloneUiPolicy.CanInvokeAction("player.revive", true, true, true, true, reviveCapabilities), "An implemented action becomes available in a validated applied session.");
+        Check(!StandaloneUiPolicy.CanInvokeAction("player.revive", true, true, true, true, reviveCapabilities), "A retired native-only action must remain unavailable even with a stale capability.");
         var mixed = new HashSet<string>(new[] { "player.godMode", "player.suicide", "player.revive", "player.noclip" }, StringComparer.OrdinalIgnoreCase);
-        Check(StandaloneUiPolicy.CanInvokeAction("player.godMode", true, true, true, true, mixed, false),
-            "An advertised memory GodMode must remain usable without native execution.");
-        Check(StandaloneUiPolicy.CanInvokeAction("player.suicide", true, true, true, true, mixed, false),
-            "An advertised memory health action must remain usable without native execution.");
-        Check(!StandaloneUiPolicy.CanInvokeAction("player.revive", true, true, true, true, mixed, false),
-            "Memory readiness cannot unlock native revive even if a stale capability remains.");
-        Check(!StandaloneUiPolicy.CanInvokeAction("player.noclip", true, true, true, true, mixed, false),
-            "Memory readiness cannot unlock native noclip even if a stale capability remains.");
+        Check(StandaloneUiPolicy.CanInvokeAction("player.godMode", true, true, true, true, mixed),
+            "An advertised memory GodMode must remain usable in the external backend.");
+        Check(StandaloneUiPolicy.CanInvokeAction("player.suicide", true, true, true, true, mixed),
+            "An advertised memory health action must remain usable in the external backend.");
+        Check(!StandaloneUiPolicy.CanInvokeAction("player.revive", true, true, true, true, mixed),
+            "A stale capability cannot unlock removed native revive.");
+        Check(!StandaloneUiPolicy.CanInvokeAction("player.noclip", true, true, true, true, mixed),
+            "A stale capability cannot unlock removed native noclip.");
+
+        foreach (var retired in new[] { "silent", "player.revive", "player.noclip", "player.invisible", "weapons.freezeAmmo", "vehicle.lock", "vehicle.unlock" })
+        {
+            var stale = new HashSet<string>(new[] { retired }, StringComparer.OrdinalIgnoreCase);
+            Check(!StandaloneUiPolicy.CanEditConfiguration(retired, true, stale), "A stale capability must not enable retired plugin controls.");
+            Check(!StandaloneUiPolicy.CanInvokeAction(retired, true, true, true, true, stale), "A stale capability must not dispatch a removed plugin action.");
+        }
 
         var lifecycle = new StandaloneUiPolicy();
         Check(!lifecycle.Observe(true, false, false, false), "Missing game must preserve first pending choices.");
@@ -47,7 +54,7 @@ internal static class UiPolicyChecks
         Check(lifecycle.Observe(false, true, true, true, 84), "Backend failure after application must reset active effects.");
         lifecycle.Disconnect();
         Check(!lifecycle.Observe(true, true, true, false, 84), "Explicit detection after disconnect starts as a fresh pending session.");
-        return 29;
+        return 43;
     }
 
     private static void Check(bool condition, string message)

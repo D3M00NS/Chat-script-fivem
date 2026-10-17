@@ -42,7 +42,8 @@ public static class ExistingInstancePolicy
             "FiveM b3258 / standalone" => LocalMenuMode.External,
             "modo administrativo" => LocalMenuMode.Administration,
             "FiveM b3258 / cliente local" => LocalMenuMode.ClientModule,
-            "FiveM b3258" => LocalMenuMode.ClientModule,
+            // Releases 3.3.x used the neutral title for the retired plugin backend.
+            "FiveM b3258" => parsed >= new Version(3, 4, 0) ? LocalMenuMode.External : LocalMenuMode.ClientModule,
             _ => null
         };
         if (mode is null) return false;

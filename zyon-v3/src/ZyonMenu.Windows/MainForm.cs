@@ -25,7 +25,6 @@ internal sealed class MainForm : Form
     private readonly Label _serverLabel = Theme.Label("", true);
     private readonly Label _connectionDetails = Theme.Label("Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
     private readonly Label _readinessDetails = Theme.Label("Verificando a conexão do cliente…", true);
-    private readonly Button _readinessPrimary = Theme.Button("Configurar integração", true);
     private readonly Button _readinessRefresh = Theme.Button("Verificar novamente");
     private readonly TextBox _process = Theme.TextBox();
     private readonly TextBox _eventLog = new();
@@ -37,10 +36,9 @@ internal sealed class MainForm : Form
     private readonly Button _lockVehicle = Theme.Button("Bloquear carro");
     private readonly Button _unlockVehicle = Theme.Button("Desbloquear carro");
     private readonly Label _playerActionStatus = Theme.Label("Ações locais exigem uma sessão ativa. Suicídio pede confirmação.", true);
-    private readonly Label _vehicleActionStatus = Theme.Label("Entre no carro ou aproxime-se dele até 8 metros.", true);
+    private readonly Label _vehicleActionStatus = Theme.Label("Sem implementação externa nesta versão.", true);
     private readonly DataGridView _featureStates = new();
-    private readonly ILocalGameSession _client;
-    private bool UsesClientModule => _client is ClientModuleSession;
+    private readonly LocalGameSession _client = new();
     private readonly StandaloneUiPolicy _policy = new();
     private readonly HashSet<string> _knownCapabilities = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _lifetime = new();
@@ -51,9 +49,7 @@ internal sealed class MainForm : Form
     private bool _polling;
     private bool _sending;
     private bool _disconnecting;
-    private bool _reviving;
     private bool _suiciding;
-    private bool _vehicleActionPending;
     private bool _closing;
     private bool _dirty = true;
     private bool _synchronizing;
@@ -63,11 +59,7 @@ internal sealed class MainForm : Form
     private long _connectionGeneration;
     private long _eventsCursor;
     private string? _lastPlayerBlockReason;
-    private string? _lastVehicleBlockReason;
     private DateTimeOffset _playerActionFeedbackUntilUtc;
-    private DateTimeOffset _vehicleActionFeedbackUntilUtc;
-
-    public bool ClientModuleRequested { get; private set; }
 
     private static MenuSettings CreateLocalDefaults()
     {
@@ -81,12 +73,9 @@ internal sealed class MainForm : Form
         return settings;
     }
 
-    public MainForm(ILocalGameSession? client = null)
+    public MainForm()
     {
-        _client = client ?? new LocalGameSession();
-        Text = UsesClientModule ? AppIdentity.ClientModuleTitle : AppIdentity.StandaloneTitle;
-        if (UsesClientModule)
-            _connectionDetails.Text = "Abra o FiveM. A conexão e a seleção das funções disponíveis são automáticas.";
+        Text = AppIdentity.StandaloneTitle;
         Size = new Size(1100, 790);
         MinimumSize = new Size(950, 660);
         StartPosition = FormStartPosition.CenterScreen;
@@ -111,27 +100,8 @@ internal sealed class MainForm : Form
         _connect.Click += async (_, _) => await StartDetectionAsync();
         _disconnect.Click += async (_, _) => await DisconnectAsync();
         _saveDiagnostic.Click += (_, _) => SaveDiagnostic();
-        _readinessPrimary.Click += (_, _) =>
-        {
-            if (!UsesClientModule)
-            {
-                ClientModuleRequested = true;
-                Close();
-                return;
-            }
-            ClientModuleInstaller.ShowSetup(this);
-            ClientModuleInstallation.Refresh(force: true);
-            UpdateAvailability();
-        };
-        _readinessRefresh.Click += async (_, _) =>
-        {
-            ClientModuleInstallation.Refresh(force: true);
-            await StartDetectionAsync();
-        };
-        _revive.Click += async (_, _) => await ReviveAsync();
+        _readinessRefresh.Click += async (_, _) => await StartDetectionAsync();
         _suicide.Click += async (_, _) => await SuicideAsync();
-        _lockVehicle.Click += async (_, _) => await SetVehicleLockAsync(true);
-        _unlockVehicle.Click += async (_, _) => await SetVehicleLockAsync(false);
         FormClosing += OnFormClosing;
         Shown += async (_, _) =>
         {
@@ -220,14 +190,12 @@ internal sealed class MainForm : Form
         _readinessDetails.Location = new Point(26, 76);
         _readinessDetails.Size = new Size(790, 48);
         _readinessDetails.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
-        _readinessPrimary.Location = new Point(26, 136);
-        _readinessPrimary.Width = 220;
-        _readinessRefresh.Location = new Point(256, 136);
+        _readinessRefresh.Location = new Point(26, 136);
         _readinessRefresh.Width = 210;
-        _saveDiagnostic.Location = new Point(486, 136);
+        _saveDiagnostic.Location = new Point(256, 136);
         _saveDiagnostic.Width = 185;
         header.Controls.AddRange(new Control[] { title, subtitle, _connectionLabel, _hotkeyLabel,
-            _readinessDetails, _readinessPrimary, _readinessRefresh, _saveDiagnostic });
+            _readinessDetails, _readinessRefresh, _saveDiagnostic });
 
         var footer = new Panel { Dock = DockStyle.Bottom, Height = 54, Padding = new Padding(26, 5, 24, 5), BackColor = Theme.Sidebar };
         _revisionLabel.Location = new Point(26, 8);
@@ -280,26 +248,10 @@ internal sealed class MainForm : Form
         page.Controls.Add(note);
     }
 
-    private RoundedCard SilentCard()
+    private static RoundedCard SilentCard()
     {
-        if (!UsesClientModule)
-        {
-            var unavailable = Card("Silent Aim · indisponível", 408, 188);
-            AddNote(unavailable, "Silent Aim experimental exige o módulo local conectado ao FiveM. Não está disponível no modo externo.", 62, 360);
-            return unavailable;
-        }
-
-        var card = Card("Silent Aim · experimental", 408, 650);
-        var settings = _settings.Silent;
-        AddToggle(card, "Ativar Silent Aim experimental", () => settings.Enabled, v => settings.Enabled = v, "silent", 60);
-        AddToggle(card, "Somente visível (linha de visão)", () => settings.OnlyVisible, v => settings.OnlyVisible = v, "silent", 100);
-        AddChoice(card, "Alvo", new[] { "Head", "Neck", "Chest" }, new[] { "Cabeça", "Pescoço", "Peito" },
-            settings.TargetBone, v => settings.TargetBone = v, "silent", 140);
-        AddChoice(card, "Tecla de ativação", new[] { "RMB", "LMB", "Alt", "Shift", "Ctrl" },
-            new[] { "Mouse [Mirar]", "Mouse [Atirar]", "Alt", "Shift", "Ctrl" }, settings.ActivationKey,
-            v => settings.ActivationKey = v, "silent", 180);
-        AddSlider(card, "FOV (pixels)", 10, 500, settings.Fov, v => settings.Fov = v, "silent", 220);
-        AddNote(card, "Somente jogadores. Sem suavização ou círculo FOV.\n\nTeste experimental com SET_PED_SHOOTS_AT_COORD, sem mover a câmera. Solte o botão de tiro após ativar. Depois, pressione LMB junto da tecla de ativação; há uma tentativa por pressionamento.\n\nExige personagem vivo, a pé e jogo em foco. Enquanto ativo, substitui a entrada normal de tiro: pode impedir tiros quando não encontra alvo no FOV.\n\nA chamada não garante redirecionar o tiro original nem acertar o alvo; pode não produzir efeito no jogo. Teste e envie o JSON de Salvar diagnóstico.", 278, 360);
+        var card = Card("Silent Aim · indisponível", 408, 188);
+        AddNote(card, "Silent Aim não está implementado no backend externo. Nenhuma alteração de tiro é enviada por esta versão.", 62, 360);
         return card;
     }
 
@@ -321,16 +273,11 @@ internal sealed class MainForm : Form
     private void BuildPlayerPage()
     {
         var page = NewPage("Player");
-        var height = UsesClientModule ? 368 : 326;
+        const int height = 326;
         var card = Card("Personagem", 408, height);
         AddToggle(card, "GodMode", () => _settings.Player.GodMode, v => _settings.Player.GodMode = v, "player.godMode", 64);
-        if (UsesClientModule)
-            AddToggle(card, "Invisibilidade", () => _settings.Player.Invisible, v => _settings.Player.Invisible = v, "player.invisible", 106);
-        var buttonTop = UsesClientModule ? 166 : 124;
-        _revive.Text = UsesClientModule ? "Reviver (nativo)" : "Reviver indisponível";
-        _tooltips.SetToolTip(_revive, UsesClientModule
-            ? "Ressuscita o personagem local pelo jogo. Não remove coma ou hospital de ESX/QBCore."
-            : "Reviver externo ainda não implementado neste perfil.");
+        const int buttonTop = 124;
+        _tooltips.SetToolTip(_revive, "Reviver externo ainda não implementado neste perfil.");
         _revive.Location = new Point(20, buttonTop);
         _revive.Width = 220;
         card.Controls.Add(_revive);
@@ -345,9 +292,7 @@ internal sealed class MainForm : Form
         RegisterCapability("player.suicide", _suicide);
         page.Controls.Add(card);
         var note = Card("Estado do personagem", 408, height);
-        AddNote(note, UsesClientModule
-            ? "GodMode e suicídio usam automaticamente o caminho confirmado para o personagem. Consulte Situação das funções para ver a disponibilidade.\n\nReviver nativo observa o personagem vivo no jogo; não remove o estado de coma ou hospital do ESX/QBCore.\n\nSuicídio define a vida como zero após confirmação e desativa GodMode. Confirme a morte na cidade."
-            : "GodMode pode ser preparado localmente e depende de um personagem validado. Consulte Situação das funções para distinguir configuração recebida de valores confirmados em leitura.\n\nSuicídio define a vida local como zero após confirmação e desativa GodMode. Confirme a morte dentro da cidade. Reviver e noclip permanecem indisponíveis neste perfil externo.", 62, 360);
+        AddNote(note, "GodMode pode ser preparado localmente e depende de um personagem validado. Consulte Situação das funções para distinguir configuração recebida de valores confirmados em leitura.\n\nSuicídio define a vida local como zero após confirmação e desativa GodMode. Confirme a morte dentro da cidade. Reviver e noclip permanecem indisponíveis neste perfil externo.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -373,23 +318,21 @@ internal sealed class MainForm : Form
     private void BuildNoclipPage()
     {
         var page = NewPage("Noclip");
-        var card = Card(UsesClientModule ? "Noclip / voar" : "Noclip externo · indisponível", 408, 215);
-        AddToggle(card, UsesClientModule ? "Ativar noclip" : "Noclip indisponível", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 64);
+        var card = Card("Noclip / voar · indisponível", 408, 215);
+        AddToggle(card, "Noclip indisponível", () => _settings.Player.Noclip, v => _settings.Player.Noclip = v, "player.noclip", 64);
         AddSlider(card, "Velocidade (m/s)", 1, 50, _settings.Player.NoclipSpeed,
             v => _settings.Player.NoclipSpeed = v, "player.noclip", 108);
-        AddNote(card, UsesClientModule ? "A velocidade muda durante o voo." : "Noclip externo ainda não implementado.", 166, 360);
+        AddNote(card, "Noclip externo ainda não implementado.", 166, 360);
         page.Controls.Add(card);
-        var note = Card(UsesClientModule ? "Controles no FiveM" : "Disponibilidade", 408, 248);
-        AddNote(note, UsesClientModule
-            ? "W / A / S / D · mover conforme a câmera\nEspaço · subir\nCtrl · descer\nShift · acelerar enquanto pressionado\n\nInsert · ocultar o menu e voltar ao jogo. A sessão do módulo local precisa permanecer conectada."
-            : "Movimento e velocidade do noclip não são enviados ao jogo por esta versão. O controle de velocidade permanece visível e desativado enquanto essa função não tem suporte real.", 62, 360);
+        var note = Card("Disponibilidade", 408, 248);
+        AddNote(note, "Movimento e velocidade do noclip não são enviados ao jogo por esta versão. O controle de velocidade permanece desativado enquanto essa função não tem suporte real.", 62, 360);
         page.Controls.Add(note);
     }
 
     private void BuildVehiclePage()
     {
         var page = NewPage("Vehicle");
-        var card = Card(UsesClientModule ? "Portas do veículo" : "Veículo · indisponível", 408, 302);
+        var card = Card("Veículo · indisponível", 408, 302);
         _lockVehicle.Location = new Point(20, 65);
         _lockVehicle.Width = 220;
         _unlockVehicle.Location = new Point(20, 117);
@@ -397,19 +340,11 @@ internal sealed class MainForm : Form
         _vehicleActionStatus.AutoSize = false;
         _vehicleActionStatus.Location = new Point(20, 178);
         _vehicleActionStatus.Size = new Size(360, 106);
-        if (!UsesClientModule)
-            _vehicleActionStatus.Text = "Bloquear e desbloquear exigem o módulo local conectado ao FiveM.";
+        _vehicleActionStatus.Text = "Sem implementação externa nesta versão.";
         card.Controls.AddRange(new Control[] { _lockVehicle, _unlockVehicle, _vehicleActionStatus });
         RegisterCapability("vehicle.lock", _lockVehicle);
         RegisterCapability("vehicle.unlock", _unlockVehicle);
-        _tooltips.SetToolTip(_lockVehicle, "Bloqueia as portas do carro ocupado ou do carro mais próximo em até 8 metros, após confirmação.");
-        _tooltips.SetToolTip(_unlockVehicle, "Desbloqueia as portas do carro ocupado ou do carro mais próximo em até 8 metros, após confirmação.");
         page.Controls.Add(card);
-        var note = Card("Como usar", 408, 302);
-        AddNote(note, UsesClientModule
-            ? "Entre no carro ou fique a até 8 metros dele. Se estiver a pé, a ação seleciona o veículo mais próximo.\n\nO módulo precisa estar conectado e ter controle do veículo. O resultado é confirmado pela leitura nativa das portas.\n\nScripts de chaves ou garagem podem mudar o estado novamente. A ação não concede chaves de ESX/QBCore e não verifica cargo de administrador."
-            : "Abra o menu normalmente e configure a integração na aba Conexão. As ações das portas não estão disponíveis no modo externo.", 62, 360);
-        page.Controls.Add(note);
     }
 
     private void BuildWeaponsPage()
@@ -417,9 +352,7 @@ internal sealed class MainForm : Form
         var page = NewPage("Weapons");
         page.Controls.Add(WeaponsCard(408));
         var note = Card("Armas", 408, 220);
-        AddNote(note, UsesClientModule
-            ? "No Recoil e No Spread dependem dos campos confirmados no processo b3258. Freeze Ammo usa o módulo local conectado. Consulte a situação de cada função e confira o comportamento no jogo."
-            : "No Recoil e No Spread só ficam disponíveis quando o perfil confirma os campos da arma. Configuração recebida não confirma efeito no jogo; consulte a situação de cada função. Freeze Ammo externo ainda não implementado.", 62, 360);
+        AddNote(note, "No Recoil e No Spread só ficam disponíveis quando o perfil confirma os campos da arma. Configuração recebida não confirma efeito no jogo; consulte a situação de cada função. Freeze Ammo externo ainda não implementado.", 62, 360);
         page.Controls.Add(note);
     }
 
@@ -428,7 +361,7 @@ internal sealed class MainForm : Form
         var card = Card("Weapons Settings", width, 212);
         AddToggle(card, "No Recoil", () => _settings.Weapons.NoRecoil, v => _settings.Weapons.NoRecoil = v, "weapons.noRecoil", 64);
         AddToggle(card, "No Spread", () => _settings.Weapons.NoSpread, v => _settings.Weapons.NoSpread = v, "weapons.noSpread", 106);
-        AddToggle(card, UsesClientModule ? "Freeze Ammo" : "Freeze Ammo · indisponível", () => _settings.Weapons.FreezeAmmo, v => _settings.Weapons.FreezeAmmo = v, "weapons.freezeAmmo", 148);
+        AddToggle(card, "Freeze Ammo · indisponível", () => _settings.Weapons.FreezeAmmo, v => _settings.Weapons.FreezeAmmo = v, "weapons.freezeAmmo", 148);
         return card;
     }
 
@@ -437,7 +370,7 @@ internal sealed class MainForm : Form
         var page = NewPage("Connection");
         var featureCard = BuildFeatureStatusCard();
         page.Controls.Add(featureCard);
-        var card = Card(UsesClientModule ? "Conexão automática" : "Detecção do processo local", 834, 315);
+        var card = Card("Detecção automática do processo", 834, 315);
         var processLabel = Theme.Label("Processo detectado");
         processLabel.Location = new Point(20, 60);
         _process.Dock = DockStyle.None;
@@ -447,7 +380,7 @@ internal sealed class MainForm : Form
         _process.Text = "Aguardando FiveM_b3258_GTAProcess.exe…";
         _process.ReadOnly = true;
         _process.AccessibleName = "Processo local detectado automaticamente";
-        var note = Theme.Label(UsesClientModule ? "Abra o FiveM. Cada função fica disponível quando seu caminho de execução é confirmado." : "Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
+        var note = Theme.Label("Abra o FiveM na build b3258. As escolhas locais aguardam um processo compatível.", true);
         note.Location = new Point(20, 137);
         note.AutoSize = false;
         note.Size = new Size(790, 42);
@@ -459,19 +392,11 @@ internal sealed class MainForm : Form
         _connectionDetails.Size = new Size(790, 55);
         _connectionDetails.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         card.Controls.AddRange(new Control[] { processLabel, _process, note, _connect, _disconnect, _connectionDetails });
-        if (UsesClientModule)
-        {
-            var setupModule = Theme.Button("Configurar integração", true);
-            setupModule.Location = new Point(350, 187);
-            setupModule.Width = 220;
-            setupModule.Click += (_, _) =>
-            {
-                ClientModuleInstaller.ShowSetup(this);
-                ClientModuleInstallation.Refresh(force: true);
-                UpdateAvailability();
-            };
-            card.Controls.Add(setupModule);
-        }
+        var removeLegacy = Theme.Button("Remover integração antiga");
+        removeLegacy.Location = new Point(350, 187);
+        removeLegacy.Width = 240;
+        removeLegacy.Click += (_, _) => LegacyPluginRemovalDialog.Show(this);
+        card.Controls.Add(removeLegacy);
         page.Controls.Add(card);
 
         var events = Card("Eventos e diagnóstico", 834, 263);
@@ -552,11 +477,8 @@ internal sealed class MainForm : Form
         if (reported.Count == 0)
         {
             _featureStates.Rows.Add("Backend local", "Sem confirmação", "Aguardando um processo e um personagem compatíveis.");
-            _featureStates.Rows.Add("Silent Aim", UsesClientModule ? "Aguardando módulo local" : "Não implementada",
-                UsesClientModule ? "Experimental; aguarde suporte confirmado pelo módulo e teste no jogo." : "Indisponível neste perfil externo.");
-            foreach (var feature in new[] { "Reviver", "Noclip / voar", "Freeze Ammo", "Bloquear carro", "Desbloquear carro" })
-                _featureStates.Rows.Add(feature, UsesClientModule ? "Aguardando módulo local" : "Não implementada",
-                    UsesClientModule ? "Prepare o módulo local e aguarde a conexão do FiveM." : "Indisponível neste perfil externo.");
+            foreach (var feature in new[] { "Silent Aim", "Reviver", "Noclip / voar", "Invisibilidade", "Freeze Ammo", "Bloquear carro", "Desbloquear carro" })
+                _featureStates.Rows.Add(feature, "Não implementada", "Indisponível neste perfil externo.");
             RestorePosition();
             return;
         }
@@ -632,15 +554,15 @@ internal sealed class MainForm : Form
         };
         _toggleBindings.Add((toggle, getter));
         if (capability == "silent")
-            _tooltips.SetToolTip(toggle, "Experimental: substitui a entrada de tiro e tenta uma chamada nativa por pressionamento. Não garante tiro redirecionado ou acerto; valide no jogo.");
+            _tooltips.SetToolTip(toggle, "Silent Aim externo ainda não implementado.");
         if (capability == "weapons.noRecoil")
             _tooltips.SetToolTip(toggle, "Só será aplicado se o perfil b3258 confirmar os campos de recuo da arma.");
         if (capability == "weapons.freezeAmmo")
-            _tooltips.SetToolTip(toggle, UsesClientModule ? "Usa o módulo local conectado para manter a munição da arma." : "Freeze Ammo externo ainda não implementado.");
+            _tooltips.SetToolTip(toggle, "Freeze Ammo externo ainda não implementado.");
         if (capability == "player.godMode")
             _tooltips.SetToolTip(toggle, "Estado local de dano. Scripts da cidade podem alterar saúde e estado de morte separadamente.");
         if (capability == "player.noclip")
-            _tooltips.SetToolTip(toggle, UsesClientModule ? "Move o personagem pelo módulo local; a velocidade é aplicada durante o voo." : "Noclip externo ainda não implementado. O ajuste permanece desativado.");
+            _tooltips.SetToolTip(toggle, "Noclip externo ainda não implementado. O ajuste permanece desativado.");
         if (capability is "aim.visibility" or "esp.visibility")
             _tooltips.SetToolTip(toggle, "Linha de visão não confirmada para o perfil b3258.");
         if (capability == "esp.names")
@@ -738,7 +660,7 @@ internal sealed class MainForm : Form
         }
         _connectionLabel.Text = "AGUARDANDO FIVEM";
         _connectionLabel.ForeColor = Theme.Warning;
-        _connectionDetails.Text = UsesClientModule ? "Aguardando o módulo no cliente FiveM e os dados locais do processo b3258…" : "Procurando FiveM_b3258_GTAProcess.exe e um personagem local válido…";
+        _connectionDetails.Text = "Procurando FiveM_b3258_GTAProcess.exe e um personagem local válido…";
         _revisionLabel.Text = "Escolhas locais pendentes; nenhum recebimento confirmado pelo backend.";
         _poll.Start();
         UpdateAvailability();
@@ -747,7 +669,7 @@ internal sealed class MainForm : Form
 
     private async Task SendSettingsAsync()
     {
-        if (_sending || _suiciding || _reviving || _vehicleActionPending || _disconnecting || !_dirty || !_healthy || !_client.DetectionEnabled ||
+        if (_sending || _suiciding || _disconnecting || !_dirty || !_healthy || !_client.DetectionEnabled ||
             _lastStatus is not { Ready: true, PlayerOnline: true } || _session is null) return;
         var cancellation = _session.Token;
         var generation = _connectionGeneration;
@@ -854,7 +776,7 @@ internal sealed class MainForm : Form
         _settings.Aim.DrawFov = Keep(_settings.Aim.DrawFov, "aim");
         _settings.Aim.OnlyVisible = Keep(_settings.Aim.OnlyVisible, "aim.visibility");
         _settings.Aim.OnlyPlayers = Keep(_settings.Aim.OnlyPlayers, "aim.playersOnly");
-        _settings.Silent.Enabled = Keep(_settings.Silent.Enabled, "silent") && UsesClientModule;
+        _settings.Silent.Enabled = false;
         _settings.Silent.DrawFov = false;
         _settings.Silent.OnlyPlayers = true;
         _settings.Weapons.NoRecoil = Keep(_settings.Weapons.NoRecoil, "weapons.noRecoil");
@@ -883,16 +805,12 @@ internal sealed class MainForm : Form
 
     private void ApplyStatus(ServerStatus status)
     {
-        if (!UsesClientModule) _settings.Silent.Enabled = false;
+        _settings.Silent.Enabled = false;
         UpdateFeatureStates(status.FeatureStates);
-        var nativeReady = !UsesClientModule || status.NativeClient is { Ready: true };
-        _connectionLabel.Text = !nativeReady
-            ? status.Ready && status.PlayerOnline ? "CONEXÃO PARCIAL"
-                : status.NativeClient is { TransportConnected: true } ? "AGUARDANDO EXECUÇÃO" : "AGUARDANDO FIVEM"
-            : status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
+        _connectionLabel.Text = status.Ready && status.PlayerOnline && status.SessionActive ? "CONFIGURAÇÃO RECEBIDA"
             : status.Ready && status.PlayerOnline ? "PERSONAGEM VALIDADO"
             : status.Ready ? "AGUARDANDO PERSONAGEM" : "AGUARDANDO FIVEM COMPATÍVEL";
-        _connectionLabel.ForeColor = nativeReady && status.Ready && status.PlayerOnline && status.SessionActive ? Theme.Success : Theme.Warning;
+        _connectionLabel.ForeColor = status.Ready && status.PlayerOnline && status.SessionActive ? Theme.Success : Theme.Warning;
         _connectionDetails.Text = status.Message;
         _process.Text = status.PlayerId is not null
             ? $"FiveM_b3258_GTAProcess.exe · PID {status.PlayerId}"
@@ -919,29 +837,20 @@ internal sealed class MainForm : Form
         _connect.Text = _client.DetectionEnabled ? "Detectando FiveM" : "Detectar FiveM";
         _disconnect.Enabled = _client.DetectionEnabled && !_closing && !_disconnecting;
         var capabilities = _knownCapabilities;
-        _revive.Text = UsesClientModule ? "Reviver (nativo)" : "Reviver indisponível";
         foreach (var (capability, controls) in _capabilityControls)
         {
             var enabled = !_disconnecting && !_closing && StandaloneUiPolicy.CanEditConfiguration(capability, _capabilitiesKnown, capabilities);
-            if (capability == "player.revive")
-                enabled = UsesClientModule && !_reviving && !_suiciding && !_vehicleActionPending && CanInvokeLocalAction(capability);
             if (capability == "player.suicide")
-                enabled = !_suiciding && !_reviving && !_vehicleActionPending && CanInvokeSuicide();
-            if (capability is "vehicle.lock" or "vehicle.unlock")
-                enabled = UsesClientModule && !_suiciding && !_reviving && !_vehicleActionPending && CanInvokeLocalAction(capability);
-            if (UsesClientModule && capability is ("player.godMode" or "player.noclip" or "player.invisible" or "weapons.freezeAmmo" or "silent"))
-                enabled = !_suiciding && !_reviving && !_vehicleActionPending && CanInvokeLocalAction(capability);
-            if (capability == "player.godMode" && (_suiciding || _reviving || _vehicleActionPending))
+                enabled = !_suiciding && CanInvokeSuicide();
+            if (capability == "player.godMode" && _suiciding)
                 enabled = false;
             if (capability is "weapons.noRecoil" or "weapons.noSpread")
                 enabled &= _healthy && _lastStatus is { Ready: true, PlayerOnline: true } &&
                     _lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase);
-            if (!UsesClientModule && capability is ("silent" or "player.revive" or "player.noclip" or "weapons.freezeAmmo"))
-                enabled = false;
             foreach (var control in controls)
             {
                 control.Enabled = enabled;
-                if (!IsNativeCapability(capability)) continue;
+                if (!HasDisabledReason(capability)) continue;
                 if (!_configurationTooltips.ContainsKey(control)) _configurationTooltips[control] = _tooltips.GetToolTip(control) ?? "";
                 if (enabled)
                 {
@@ -950,7 +859,7 @@ internal sealed class MainForm : Form
                 }
                 else
                 {
-                    var reason = NativeActionBlockReason(capability);
+                    var reason = ActionBlockReason(capability);
                     _disabledControlReasons[control] = reason;
                     _tooltips.SetToolTip(control, reason);
                     RegisterDisabledControlTooltip(control);
@@ -960,99 +869,47 @@ internal sealed class MainForm : Form
         UpdateActionBlockMessages();
     }
 
-    private static bool IsNativeCapability(string capability) => capability is
+    private static bool HasDisabledReason(string capability) => capability is
         "player.godMode" or "player.noclip" or "player.invisible" or "player.revive" or "player.suicide" or
         "weapons.freezeAmmo" or "silent" or "vehicle.lock" or "vehicle.unlock";
 
     private void UpdateReadinessBanner()
     {
-        _readinessPrimary.Text = UsesClientModule ? "Configurar integração" : "Conectar automaticamente";
-        _readinessPrimary.Visible = !UsesClientModule || _lastStatus?.NativeClient?.TransportConnected != true &&
-            ClientModuleInstallation.Current.State is not ClientModuleInstallationState.ReadyOnDisk;
-        _readinessRefresh.Left = _readinessPrimary.Visible ? 256 : 26;
-        _saveDiagnostic.Left = _readinessPrimary.Visible ? 486 : 256;
-        _readinessPrimary.Enabled = !_closing && !_disconnecting;
         _readinessRefresh.Enabled = !_closing && !_disconnecting;
         _saveDiagnostic.Enabled = !_closing;
-        if (!UsesClientModule)
-        {
-            _readinessDetails.Text = "Modo externo: as funções de personagem e veículo precisam do cliente local. Use o botão abaixo para trocar de modo.";
-            _readinessDetails.ForeColor = Theme.Warning;
-        }
-        else
-        {
-            ClientModuleInstallation.Refresh();
-            var reason = NativeActionBlockReason();
-            _readinessDetails.Text = string.IsNullOrEmpty(reason)
-                ? "Conexão confirmada. Use as funções habilitadas; consulte os resultados na aba Conexão."
-                : reason;
-            _readinessDetails.ForeColor = string.IsNullOrEmpty(reason) ? Theme.Success : Theme.Warning;
-        }
+        var reason = ActionBlockReason();
+        _readinessDetails.Text = string.IsNullOrEmpty(reason)
+            ? "Processo e personagem confirmados. Consulte a situação de cada função na aba Conexão."
+            : reason;
+        _readinessDetails.ForeColor = string.IsNullOrEmpty(reason) ? Theme.Success : Theme.Warning;
         _tooltips.SetToolTip(_readinessDetails, _readinessDetails.Text);
     }
 
-    private string NativeActionBlockReason(string? capability = null)
+    private string ActionBlockReason(string? capability = null)
     {
-        if (!UsesClientModule) return "Modo externo. Clique em Conectar automaticamente para detectar a integração do FiveM.";
+        if (capability is "silent" or "player.revive" or "player.noclip" or "player.invisible" or
+            "weapons.freezeAmmo" or "vehicle.lock" or "vehicle.unlock")
+            return "Sem implementação externa nesta versão.";
         if (_closing || _disconnecting) return "A sessão está sendo encerrada. Aguarde para conectar novamente.";
         if (!_client.DetectionEnabled) return "Detecção interrompida. Clique em Verificar novamente para procurar o FiveM.";
-        var native = _healthy ? _lastStatus?.NativeClient : null;
-        var installation = ClientModuleInstallation.Current;
-        if (!_healthy || native is not { Ready: true })
-        {
-            if (installation.RunningGameProcessName is { Length: > 0 } processName &&
-                processName.StartsWith("FiveM_b", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(Path.GetFileNameWithoutExtension(processName), "FiveM_b3258_GTAProcess", StringComparison.OrdinalIgnoreCase))
-                return $"{processName} está aberto. Esta versão precisa da build b3258; entre numa cidade compatível.";
-            if (installation.State == ClientModuleInstallationState.AccessDenied)
-                return installation.Reason + " Confira a pasta e suas permissões de leitura.";
-            if (native is { TransportConnected: true })
-                return string.IsNullOrWhiteSpace(native.Message)
-                    ? "O módulo conectou, mas o FiveM ainda não confirmou execução nativa. Aguarde entrar na cidade."
-                    : NativeDisplayMessage(native);
-            if (installation.RunningGameProcessId is null && installation.RootSource != "unknown")
-                return installation.State is ClientModuleInstallationState.Missing or ClientModuleInstallationState.Outdated
-                    ? "FiveM não encontrado. Prepare o módulo local com o jogo fechado; depois abra o jogo e entre na cidade. " + installation.Reason
-                    : "FiveM não encontrado. Abra o jogo após preparar o módulo local e entre na cidade.";
-            if (installation.State is ClientModuleInstallationState.Missing or ClientModuleInstallationState.Outdated or ClientModuleInstallationState.Unknown)
-                return installation.Reason + " " + installation.SuggestedAction;
-            if (installation.State == ClientModuleInstallationState.ReadyOnDisk)
-            {
-                var detail = string.IsNullOrWhiteSpace(native?.Message) ? "" : " " + native.Message;
-                return installation.ModuleLoaded == true
-                    ? "O ASI está carregado, mas a comunicação local ainda não respondeu. Clique em Verificar novamente." + detail
-                    : "Arquivo atualizado; o FiveM ainda não confirmou carregamento. Reinicie após preparar o módulo e entre numa cidade que permita plugins." + detail;
-            }
-            return !string.IsNullOrWhiteSpace(native?.Message) ? native.Message : "Aguardando a conexão do módulo local. Clique em Verificar novamente.";
-        }
-        if (_lastStatus is not { Ready: true, PlayerOnline: true })
-            return string.IsNullOrWhiteSpace(_lastStatus?.Message) ? "Módulo conectado. Aguarde um personagem válido dentro da cidade." : _lastStatus.Message;
-        if (!_lastStatus.SessionActive) return "Módulo conectado. Aguarde a confirmação da configuração do personagem.";
+        if (!_healthy || _lastStatus is not { Ready: true, PlayerOnline: true })
+            return string.IsNullOrWhiteSpace(_lastStatus?.Message) ? "Aguardando FiveM b3258 e um personagem válido." : _lastStatus.Message;
+        if (!_lastStatus.SessionActive) return "Personagem validado. Aguardando a configuração local.";
         if (capability is not null && !_lastStatus.Capabilities.Contains(capability, StringComparer.OrdinalIgnoreCase))
-            return "O módulo conectado ainda não confirmou suporte para esta função. Consulte a aba Conexão.";
-        if (_reviving || _suiciding || _vehicleActionPending) return "Aguarde a ação atual terminar.";
+            return "O perfil detectado ainda não confirmou suporte para esta função. Consulte a aba Conexão.";
+        if (_suiciding) return "Aguarde a ação atual terminar.";
         return "";
-    }
-
-    private static string NativeDisplayMessage(NativeClientStatus native)
-    {
-        if (native.Error == 1003 && native.Message.StartsWith("ASI loaded; registered game callback has not entered.", StringComparison.Ordinal))
-            return "O FiveM carregou a integração, mas não iniciou sua execução. A autorização de ScriptHook do servidor ainda não foi confirmada. As funções habilitadas continuam disponíveis.";
-        if (native.Error == 1003 && native.Message.StartsWith("The registered game callback stopped updating;", StringComparison.Ordinal))
-            return "A execução da integração no FiveM parou. As funções que dependem dela aguardam uma nova confirmação.";
-        return native.Message;
     }
 
     private void UpdateActionBlockMessages()
     {
-        var reason = NativeActionBlockReason();
-        var playerReason = CanInvokeSuicide() || CanInvokeLocalAction("player.godMode") ? "" : reason;
-        if (!_reviving && !_suiciding && DateTimeOffset.UtcNow >= _playerActionFeedbackUntilUtc)
+        var reason = CanInvokeSuicide() || CanInvokeLocalAction("player.godMode") ? "" : ActionBlockReason();
+        if (!_suiciding && DateTimeOffset.UtcNow >= _playerActionFeedbackUntilUtc)
         {
-            if (!string.IsNullOrEmpty(playerReason))
+            if (!string.IsNullOrEmpty(reason))
             {
-                _lastPlayerBlockReason = playerReason;
-                _playerActionStatus.Text = playerReason;
+                _lastPlayerBlockReason = reason;
+                _playerActionStatus.Text = reason;
                 _playerActionStatus.ForeColor = Theme.Warning;
             }
             else if (_playerActionStatus.Text == _lastPlayerBlockReason)
@@ -1060,21 +917,6 @@ internal sealed class MainForm : Form
                 _playerActionStatus.Text = "Use as funções habilitadas. Suicídio pede confirmação.";
                 _playerActionStatus.ForeColor = Theme.Muted;
                 _lastPlayerBlockReason = null;
-            }
-        }
-        if (!_vehicleActionPending && DateTimeOffset.UtcNow >= _vehicleActionFeedbackUntilUtc)
-        {
-            if (!string.IsNullOrEmpty(reason))
-            {
-                _lastVehicleBlockReason = reason;
-                _vehicleActionStatus.Text = reason;
-                _vehicleActionStatus.ForeColor = Theme.Warning;
-            }
-            else if (_vehicleActionStatus.Text == _lastVehicleBlockReason)
-            {
-                _vehicleActionStatus.Text = "Entre no carro ou aproxime-se dele até 8 metros.";
-                _vehicleActionStatus.ForeColor = Theme.Muted;
-                _lastVehicleBlockReason = null;
             }
         }
     }
@@ -1100,82 +942,24 @@ internal sealed class MainForm : Form
         };
     }
 
-    private async Task ReviveAsync()
-    {
-        if (!UsesClientModule || _reviving || _suiciding || _vehicleActionPending || !CanInvokeLocalAction("player.revive")) return;
-        var cancellation = _session!.Token;
-        var generation = _connectionGeneration;
-        var processId = _lastStatus!.PlayerId;
-        var playerEpoch = _client.PlayerEpoch;
-        var priorSettings = _settingsRequest;
-        _reviving = true;
-        _debounce.Stop();
-        _playerActionStatus.Text = "Aguardando o reviver nativo no cliente local…";
-        _playerActionStatus.ForeColor = Theme.Muted;
-        UpdateAvailability();
-        try
-        {
-            if (priorSettings is not null) await priorSettings.WaitAsync(cancellation);
-            cancellation.ThrowIfCancellationRequested();
-            if (generation != _connectionGeneration || _closing) return;
-            if (!CanInvokeLocalAction("player.revive") || _lastStatus?.PlayerId != processId || _client.PlayerEpoch != playerEpoch)
-                throw new InvalidOperationException("O personagem local mudou; tente a ação novamente no personagem atual.");
-            await _client.ReviveAsync(playerEpoch, cancellation);
-            if (generation != _connectionGeneration || _closing) return;
-            const string message = "Personagem vivo observado no jogo; confirme o estado médico na cidade.";
-            _playerActionStatus.Text = message;
-            _playerActionStatus.ForeColor = Theme.Text;
-            _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
-            _revisionLabel.Text = message;
-            AppendLog(message);
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception error)
-        {
-            if (generation == _connectionGeneration && !_closing)
-            {
-                var message = "Reviver nativo não confirmado: " + error.Message;
-                _playerActionStatus.Text = message;
-                _playerActionStatus.ForeColor = Theme.Warning;
-                _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
-                _revisionLabel.Text = message;
-                AppendLog(message);
-            }
-        }
-        finally
-        {
-            if (generation == _connectionGeneration)
-            {
-                _reviving = false;
-                if (!_closing)
-                {
-                    UpdateAvailability();
-                    if (_dirty && _healthy && _client.DetectionEnabled && !_debounce.Enabled) _debounce.Start();
-                }
-            }
-        }
-    }
-
     private bool CanInvokeLocalAction(string capability) =>
         !_closing && !_disconnecting && _client.DetectionEnabled && _session is not null &&
         _lastStatus is { } status && StandaloneUiPolicy.CanInvokeAction(capability, _healthy, status.Ready,
-            status.PlayerOnline, status.SessionActive, _knownCapabilities,
-            !UsesClientModule || status.NativeClient is { Ready: true });
+            status.PlayerOnline, status.SessionActive, _knownCapabilities);
 
     private bool CanInvokeSuicide() => CanInvokeLocalAction("player.suicide");
 
     private async Task SuicideAsync()
     {
-        if (_suiciding || _reviving || _vehicleActionPending || !CanInvokeSuicide()) return;
+        if (_suiciding || !CanInvokeSuicide()) return;
         var confirmedGeneration = _connectionGeneration;
         var confirmedProcessId = _lastStatus!.PlayerId;
         var confirmedPlayerEpoch = _client.PlayerEpoch;
         if (MessageBox.Show(this,
-                UsesClientModule ? "Solicitar suicídio do personagem? GodMode e noclip serão desativados."
-                    : "Definir a vida do personagem como zero? GodMode será desativado.",
+                "Definir a vida do personagem como zero? GodMode será desativado.",
                 "Confirmar suicídio", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
                 MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-        if (_suiciding || _reviving || _vehicleActionPending || !CanInvokeSuicide()) return;
+        if (_suiciding || !CanInvokeSuicide()) return;
         if (confirmedGeneration != _connectionGeneration || confirmedProcessId != _lastStatus!.PlayerId ||
             confirmedPlayerEpoch != _client.PlayerEpoch)
         {
@@ -1191,7 +975,6 @@ internal sealed class MainForm : Form
         var priorSettings = _settingsRequest;
         _suiciding = true;
         _settings.Player.GodMode = false;
-        if (UsesClientModule) _settings.Player.Noclip = false;
         SettingsChanged();
         _debounce.Stop();
         _playerActionStatus.Text = "Desativando GodMode e aguardando a operação local…";
@@ -1208,8 +991,7 @@ internal sealed class MainForm : Form
                 throw new InvalidOperationException("A sessão local mudou; confirme novamente a ação no personagem atual.");
             await _client.SuicideAsync(confirmedPlayerEpoch, cancellation);
             if (generation != _connectionGeneration || _closing) return;
-            var message = UsesClientModule ? "Morte nativa observada; confirme o estado na cidade."
-                : "Vida zero observada; confirme a morte na cidade.";
+            const string message = "Vida zero observada; confirme a morte na cidade.";
             _playerActionStatus.Text = message;
             _playerActionStatus.ForeColor = Theme.Text;
             _playerActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
@@ -1232,80 +1014,6 @@ internal sealed class MainForm : Form
             if (generation == _connectionGeneration)
             {
                 _suiciding = false;
-                if (!_closing)
-                {
-                    UpdateAvailability();
-                    if (_dirty && _healthy && _client.DetectionEnabled && !_debounce.Enabled) _debounce.Start();
-                }
-            }
-        }
-    }
-
-    private async Task SetVehicleLockAsync(bool locked)
-    {
-        var capability = locked ? "vehicle.lock" : "vehicle.unlock";
-        if (!UsesClientModule || _vehicleActionPending || _suiciding || _reviving || !CanInvokeLocalAction(capability)) return;
-        var confirmedGeneration = _connectionGeneration;
-        var confirmedProcessId = _lastStatus!.PlayerId;
-        var confirmedPlayerEpoch = _client.PlayerEpoch;
-        var action = locked ? "Bloquear" : "Desbloquear";
-        if (MessageBox.Show(this,
-                $"{action} as portas do carro ocupado ou do carro mais próximo em até 8 metros? Mantenha-se próximo do mesmo veículo até a conclusão.",
-                $"Confirmar: {action.ToLowerInvariant()} carro", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
-                MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
-        if (_vehicleActionPending || _suiciding || _reviving || !CanInvokeLocalAction(capability)) return;
-        if (confirmedGeneration != _connectionGeneration || confirmedProcessId != _lastStatus!.PlayerId ||
-            confirmedPlayerEpoch != _client.PlayerEpoch)
-        {
-            _vehicleActionStatus.Text = "A sessão local mudou. Confirme novamente a ação no personagem atual.";
-            _vehicleActionStatus.ForeColor = Theme.Warning;
-            _vehicleActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
-            return;
-        }
-
-        var cancellation = _session!.Token;
-        var generation = _connectionGeneration;
-        var processId = _lastStatus!.PlayerId;
-        var priorSettings = _settingsRequest;
-        _vehicleActionPending = true;
-        _debounce.Stop();
-        _vehicleActionStatus.Text = $"Aguardando o módulo {action.ToLowerInvariant()} as portas do carro…";
-        _vehicleActionStatus.ForeColor = Theme.Muted;
-        UpdateAvailability();
-        try
-        {
-            if (priorSettings is not null) await priorSettings.WaitAsync(cancellation);
-            cancellation.ThrowIfCancellationRequested();
-            if (generation != _connectionGeneration || _closing) return;
-            if (!CanInvokeLocalAction(capability) || _lastStatus?.PlayerId != processId || _client.PlayerEpoch != confirmedPlayerEpoch)
-                throw new InvalidOperationException("A sessão local mudou; confirme novamente a ação no personagem atual.");
-            await _client.SetVehicleLockAsync(locked, confirmedPlayerEpoch, cancellation);
-            if (generation != _connectionGeneration || _closing) return;
-            var message = locked
-                ? "Portas bloqueadas observadas no jogo. Scripts de chaves podem alterar o estado novamente."
-                : "Portas desbloqueadas observadas no jogo. Scripts de chaves podem alterar o estado novamente.";
-            _vehicleActionStatus.Text = message;
-            _vehicleActionStatus.ForeColor = Theme.Text;
-            _vehicleActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
-            _revisionLabel.Text = message;
-            AppendLog(message);
-        }
-        catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
-        catch (Exception error)
-        {
-            if (generation != _connectionGeneration || _closing) return;
-            var message = $"{action} carro não confirmado: {error.Message}";
-            _vehicleActionStatus.Text = message;
-            _vehicleActionStatus.ForeColor = Theme.Warning;
-            _vehicleActionFeedbackUntilUtc = DateTimeOffset.UtcNow.AddSeconds(20);
-            _revisionLabel.Text = message;
-            AppendLog(message);
-        }
-        finally
-        {
-            if (generation == _connectionGeneration)
-            {
-                _vehicleActionPending = false;
                 if (!_closing)
                 {
                     UpdateAvailability();
@@ -1353,18 +1061,12 @@ internal sealed class MainForm : Form
         _settingsRequest = null;
         _polling = false;
         _disconnecting = false;
-        _reviving = false;
         _suiciding = false;
-        _vehicleActionPending = false;
         _playerActionFeedbackUntilUtc = DateTimeOffset.MinValue;
-        _vehicleActionFeedbackUntilUtc = DateTimeOffset.MinValue;
         _lastPlayerBlockReason = null;
-        _lastVehicleBlockReason = null;
         _playerActionStatus.Text = "Ações locais exigem uma sessão ativa. Suicídio pede confirmação.";
         _playerActionStatus.ForeColor = Theme.Muted;
-        _vehicleActionStatus.Text = UsesClientModule
-            ? "Entre no carro ou aproxime-se dele até 8 metros."
-            : "Bloquear e desbloquear exigem o módulo local conectado ao FiveM.";
+        _vehicleActionStatus.Text = "Sem implementação externa nesta versão.";
         _vehicleActionStatus.ForeColor = Theme.Muted;
         _policy.Disconnect();
         ResetActiveEffects();

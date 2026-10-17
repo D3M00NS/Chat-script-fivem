@@ -36,9 +36,14 @@ internal static class ExistingInstanceChecks
             "The same client-module version can reactivate its window.");
         Check(!ExistingInstancePolicy.TryParseWindowTitle("Zyon 3.2.0 — FiveM b3258 / cliente local", out _, out _),
             "The legacy two-mode parser must not mistake the module for the external backend.");
-        Check(ExistingInstancePolicy.TryParseModeWindowTitle(AppIdentity.ClientModuleTitle, out moduleVersion, out moduleMode) &&
-            moduleVersion == AppIdentity.Version && moduleMode == LocalMenuMode.ClientModule,
-            "AppIdentity and the client-module startup parser must agree.");
+        Check(ExistingInstancePolicy.TryParseModeWindowTitle("Zyon 3.3.3 — FiveM b3258", out moduleVersion, out moduleMode) &&
+            moduleVersion == new Version(3, 3, 3, 0) && moduleMode == LocalMenuMode.ClientModule,
+            "The old neutral title must still identify the retired plugin backend.");
+        Check(ExistingInstancePolicy.TryParseModeWindowTitle("Zyon 3.4.0 — FiveM b3258", out var externalVersion, out var externalMode) &&
+            externalVersion == new Version(3, 4, 0, 0) && externalMode == LocalMenuMode.External,
+            "The external-only release must identify its neutral title as external.");
+        Check(ExistingInstancePolicy.Decide(new Version(3, 4, 0, 0), moduleVersion, LocalMenuMode.External, moduleMode) == ExistingInstanceAction.VersionConflict,
+            "The external-only release must not activate an old plugin-backed menu.");
         Check(ExistingInstancePolicy.TryParseWindowTitle("Zyon 3.1.2 — FiveM b3258 / standalone", out var titleVersion, out var titleMode) &&
             titleVersion == current && titleMode == false, "The running title must normalize its three components to the four-component assembly version.");
         Check(ExistingInstancePolicy.Decide(current, titleVersion, false, titleMode) == ExistingInstanceAction.Activate,
@@ -49,8 +54,8 @@ internal static class ExistingInstanceChecks
         Check(ExistingInstancePolicy.TryParseWindowTitle("Zyon 3.1.2 — modo administrativo", out titleVersion, out titleMode) &&
             ExistingInstancePolicy.Decide(current, titleVersion, false, titleMode) == ExistingInstanceAction.ModeConflict,
             "A versioned administrative title must be identified without changing the default mode.");
-        Check(ExistingInstancePolicy.TryParseWindowTitle(AppIdentity.StandaloneTitle, out titleVersion, out titleMode) &&
-            titleVersion == AppIdentity.Version && titleMode == false, "AppIdentity and the parser must share the actual title contract.");
+        Check(AppIdentity.StandaloneTitle == $"Zyon {AppIdentity.DisplayVersion} — FiveM b3258",
+            "AppIdentity must use the neutral external-only window title.");
         foreach (var invalid in new[] { "Zyon v3 — FiveM b3258 / standalone", "Zyon 3.1 — FiveM b3258 / standalone",
             "Zyon 3.1.2.0 — FiveM b3258 / standalone", "Zyon 03.1.2 — FiveM b3258 / standalone",
             "Zyon 3.1.2 — other", "Other 3.1.2 — FiveM b3258 / standalone", "Zyon 3.1.2 — FiveM b3258 / standalone extra" })

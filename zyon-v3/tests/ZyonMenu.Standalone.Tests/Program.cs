@@ -6,6 +6,8 @@ using ZyonMenu.Standalone.Tests;
 if (ExistingInstanceChecks.TryHandleChild(args, out var childExitCode)) return childExitCode;
 if (args.Length == 3 && args[0] == "--check-embedded-client")
     return EmbeddedClientModuleChecks.Verify(args[1], args[2]);
+if (args.Length == 2 && args[0] == "--check-external-build")
+    return EmbeddedClientModuleChecks.VerifyExternalOnly(args[1]);
 if (args.Length == 1 && args[0] == "--check-executable-signatures")
 {
     Console.WriteLine($"PASS executable signature scanner; {ExecutableSignatureScannerChecks.Run()} assertions.");
@@ -28,6 +30,7 @@ var suites = new List<(string Name, Action Body)>
     ("external observation readback and diagnostic snapshots", () => assertions += ExternalObservationChecks.Run()),
     ("bounded PE64 signature coverage, boundaries and unreadable pages", () => assertions += ExecutableSignatureScannerChecks.Run()),
     ("external one-shot health actions and stale work", () => assertions += ExternalHealthActionChecks.Run()),
+    ("reversible legacy plugin removal and file preservation", () => assertions += LegacyPluginRemovalChecks.Run()),
     ("client-module protocol framing and named pipe transport", () => assertions += ClientModuleProtocolChecks.Run()),
     ("client-module installation hashes and bounded metadata", () => assertions += ClientModuleInstallationChecks.Run()),
     ("client-module provider settings, actions and lifecycle", () => assertions += ClientModuleSessionChecks.Run())

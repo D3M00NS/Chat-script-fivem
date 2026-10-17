@@ -6,9 +6,8 @@ internal static class AppIdentity
 {
     public static Version Version { get; } = ReadVersion();
     public static string DisplayVersion => $"{Version.Major}.{Version.Minor}.{Version.Build}";
-    public static string StandaloneTitle => $"Zyon {DisplayVersion} — FiveM b3258 / standalone";
+    public static string StandaloneTitle => $"Zyon {DisplayVersion} — FiveM b3258";
     public static string AdministrativeTitle => $"Zyon {DisplayVersion} — modo administrativo";
-    public static string ClientModuleTitle => $"Zyon {DisplayVersion} — FiveM b3258";
 
     private static Version ReadVersion()
     {

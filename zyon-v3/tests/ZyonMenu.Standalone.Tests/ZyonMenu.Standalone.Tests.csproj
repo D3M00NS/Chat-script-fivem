@@ -14,6 +14,7 @@
     <Compile Include="../../src/ZyonMenu.Windows/ExecutableSignatureScanner.cs" Link="ExecutableSignatureScanner.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/LocalRuntimeTelemetry.cs" Link="LocalRuntimeTelemetry.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ExternalHealthAction.cs" Link="ExternalHealthAction.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/LegacyPluginRemoval.cs" Link="LegacyPluginRemoval.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ClientModuleInstallation.cs" Link="ClientModuleInstallation.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ClientModuleSession.cs" Link="ClientModuleSession.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ILocalGameSession.cs" Link="ILocalGameSession.cs" />
