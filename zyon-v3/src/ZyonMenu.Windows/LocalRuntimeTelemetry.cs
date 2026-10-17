@@ -97,6 +97,13 @@ internal sealed class WeaponTelemetry
 
 internal sealed class SignatureTelemetry
 {
+    public bool Complete { get; set; }
+    public uint ImageSize { get; set; }
+    public long BytesRead { get; set; }
+    public long UnreadableBytes { get; set; }
+    public int ReadFailures { get; set; }
+    public string CoverageReason { get; set; } = "Processo ainda não analisado.";
+    public List<SignatureSectionTelemetry> Sections { get; set; } = [];
     public int ExecutableSectionsRead { get; set; }
     public int ExecutableSectionsSkipped { get; set; }
     public int RecoilMatchCount { get; set; }
@@ -105,6 +112,20 @@ internal sealed class SignatureTelemetry
     public List<int> SpreadCandidates { get; set; } = [];
     public string RecoilReason { get; set; } = "Processo ainda não analisado.";
     public string SpreadReason { get; set; } = "Processo ainda não analisado.";
+}
+
+internal sealed class SignatureSectionTelemetry
+{
+    public string Name { get; set; } = "";
+    public uint Rva { get; set; }
+    public uint VirtualSize { get; set; }
+    public uint RawSize { get; set; }
+    public uint ScanSize { get; set; }
+    public long BytesRead { get; set; }
+    public long UnreadableBytes { get; set; }
+    public int ReadFailures { get; set; }
+    public bool Complete { get; set; }
+    public string Reason { get; set; } = "Ainda não lida.";
 }
 
 internal sealed class GodModeTelemetry

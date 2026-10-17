@@ -1,3 +1,13 @@
+# Zyon 3.3.2 — varredura de armas e execução do módulo
+
+[Pacote completo com runtime](ZyonMenu-v3.3.2-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.2-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.2-packages.json)
+
+Remove o descarte de seções executáveis acima de 32 MB na busca de No Recoil/No Spread, com leitura em blocos e fallback por páginas. Uma análise incompleta não habilita offsets. Preserva falhas específicas de validação nativa e distingue callback nunca iniciado de callback interrompido.
+
+Feche o FiveM, extraia em pasta nova e use **Preparar módulo local** novamente. O servidor continua precisando permitir ScriptHook/plugins. **A causa do bloqueio no jogo ainda não está confirmada e não se afirma que a conexão ou todas as funções foram resolvidas.** [Instruções](../zyon-v3/docs/client-module-3.3.2.md).
+
+## Versões anteriores
+
 # Zyon 3.3.1 — conexão e preparação do cliente
 
 [Pacote completo com runtime](ZyonMenu-v3.3.1-completo.zip) · [Pacote compacto](ZyonMenu-v3.3.1-compacto.zip) · [Hashes SHA256](ZyonMenu-v3.3.1-packages.json)

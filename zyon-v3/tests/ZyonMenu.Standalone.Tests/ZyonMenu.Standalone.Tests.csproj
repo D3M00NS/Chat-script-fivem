@@ -11,6 +11,7 @@
     <Compile Include="../../src/ZyonMenu.Windows/StandaloneInstance.cs" Link="StandaloneInstance.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/AppIdentity.cs" Link="AppIdentity.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ExternalReadback.cs" Link="ExternalReadback.cs" />
+    <Compile Include="../../src/ZyonMenu.Windows/ExecutableSignatureScanner.cs" Link="ExecutableSignatureScanner.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/LocalRuntimeTelemetry.cs" Link="LocalRuntimeTelemetry.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ExternalHealthAction.cs" Link="ExternalHealthAction.cs" />
     <Compile Include="../../src/ZyonMenu.Windows/ClientModuleInstallation.cs" Link="ClientModuleInstallation.cs" />

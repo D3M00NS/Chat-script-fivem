@@ -99,8 +99,75 @@ void FreshAndStaleRuntimeRespectReadiness() {
     const auto stale = BuildStatusSnapshot(token, runtime, control, 2, {}, 11001);
     Check(stale.error == FrameStale && !(stale.stateFlags & (Ready | SettingsActive)) && !stale.capabilities,
         "An old frame loses native readiness.");
+    Check(!stale.appliedRevision, "An old frame cannot confirm that settings remain applied.");
     const auto future = BuildStatusSnapshot(token, runtime, control, 2, {}, 9999);
     Check(future.error == FrameStale && !(future.stateFlags & Ready), "A future native tick cannot prove readiness.");
+}
+
+void FreshCallbackPreservesItsSpecificPreflightFailure() {
+    const std::uint8_t token[16]{};
+    ControlSnapshot control{};
+    control.sessionEpoch = 4; control.settings.revision = 8;
+    for (const auto error : {WaitingNative, InvalidPed, LeaseOrOffline}) {
+        for (const std::uint64_t nativeTick : {0u, 7000u}) {
+            RuntimeStatus runtime{};
+            runtime.scriptTick = 9000;
+            runtime.tick = nativeTick;
+            runtime.error = error;
+            CopyStatusMessage(runtime.message, error == WaitingNative ? "The game timer has not advanced."
+                : error == InvalidPed ? "Waiting for a real local ped with a valid entity model."
+                : "No live local control lease; owned effects released.");
+            // Cover both startup and loss of validation after an earlier
+            // native frame. Neither may turn a callback heartbeat into a
+            // new native observation or a settings confirmation.
+            runtime.appliedRevision = 8;
+            runtime.capabilities = KnownCapabilities;
+            runtime.stateFlags = SettingsActive;
+            const auto packet = BuildStatusSnapshot(token, runtime, control, 4, {}, 9500);
+            Check(packet.error == error && std::string(packet.message) == runtime.message,
+                "A fresh current-epoch callback retains its concrete preflight reason.");
+            Check(packet.tick == nativeTick && !packet.ped && !packet.appliedRevision && !packet.capabilities,
+                "A callback heartbeat cannot invent a native frame, ped, settings confirmation or capabilities.");
+            Check(packet.stateFlags == Blocked,
+                "Fresh preflight failure remains blocked without native readiness.");
+        }
+    }
+}
+
+void CallbackFreshnessDistinguishesNeverEnteredStoppedAndNewEpoch() {
+    const std::uint8_t token[16]{};
+    ControlSnapshot control{};
+    control.sessionEpoch = 7;
+    RuntimeStatus runtime{};
+    runtime.error = InvalidPed;
+    CopyStatusMessage(runtime.message, "Waiting for a real local ped.");
+    const auto never = BuildStatusSnapshot(token, runtime, control, 7, {}, 5000);
+    Check(never.error == FrameStale && std::string(never.message).find("callback has not entered") != std::string::npos,
+        "A never-entered callback is distinct from a concrete preflight result.");
+    runtime.scriptTick = 3000;
+    const auto stopped = BuildStatusSnapshot(token, runtime, control, 7, {}, 5000);
+    Check(stopped.error == FrameStale && std::string(stopped.message).find("callback stopped updating") != std::string::npos,
+        "An old preflight reason cannot hide a stopped callback.");
+    runtime.scriptTick = 4999;
+    const auto reconnect = BuildStatusSnapshot(token, runtime, control, 6, {}, 5000);
+    Check(reconnect.error == FrameStale && std::string(reconnect.message).find("for this connection") != std::string::npos,
+        "A previous epoch's live callback cannot explain the new connection's state.");
+    for (const auto& packet : {never, stopped, reconnect}) {
+        Check(packet.stateFlags == Blocked && !packet.tick && !packet.capabilities && !packet.appliedRevision && !packet.ped,
+            "Missing current callback observations never grant readiness or native effects.");
+    }
+    const auto future = BuildStatusSnapshot(token, runtime, control, 7, {}, 4998);
+    Check(future.error == FrameStale && !(future.stateFlags & Ready),
+        "A future heartbeat cannot preserve a preflight observation as current.");
+    runtime.stateFlags = Ready;
+    const auto claimedReady = BuildStatusSnapshot(token, runtime, control, 7, {}, 5000);
+    Check(claimedReady.error == FrameStale && claimedReady.stateFlags == Blocked,
+        "A callback heartbeat cannot preserve readiness without a validated native frame.");
+    runtime.stateFlags = 0;
+    control.sessionEpoch = 0;
+    const auto noConnection = BuildStatusSnapshot(token, runtime, control, 0, {}, 5000);
+    Check(noConnection.error == FrameStale && noConnection.stateFlags == Blocked && !noConnection.capabilities,
+        "Two zero epochs cannot establish a current connection preflight observation.");
 }
 
 void MessagesRemainBoundedAsciiAndProtocolErrorsRemainVisible() {
@@ -126,8 +193,10 @@ int main() {
         NoFrameDoesNotProvePermissionDenial();
         RuntimeFailureAndNewQueuedActionKeepTheirMeaning();
         FreshAndStaleRuntimeRespectReadiness();
+        FreshCallbackPreservesItsSpecificPreflightFailure();
+        CallbackFreshnessDistinguishesNeverEnteredStoppedAndNewEpoch();
         MessagesRemainBoundedAsciiAndProtocolErrorsRemainVisible();
-        std::cout << "Native status snapshot: 6 suites, " << assertions << " assertions passed.\n";
+        std::cout << "Native status snapshot: 8 suites, " << assertions << " assertions passed.\n";
         return EXIT_SUCCESS;
     } catch (const std::exception& error) {
         std::cerr << "Native status snapshot failure: " << error.what() << '\n';

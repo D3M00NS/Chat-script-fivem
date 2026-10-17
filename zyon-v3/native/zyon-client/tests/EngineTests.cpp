@@ -272,6 +272,8 @@ struct EngineDirectedFixture {
 void PreflightAndQueuedSettings() {
     Fixture f; f.input.settings.flags = GodMode;
     Check(f.Step().capabilities == 0, "first frame must not claim native capabilities");
+    Check(f.engine.Status().scriptTick == f.now && f.engine.Status().tick == 0,
+        "the first callback records a heartbeat without inventing a validated native frame");
     Check(f.fake.entities[1].damageable, "queued settings must not write before preflight");
     const auto ready = f.Step();
     Check((ready.stateFlags & (Ready | SettingsActive | PedAlive)) == (Ready | SettingsActive | PedAlive), "second advancing frame validates the ped");
@@ -280,6 +282,8 @@ void PreflightAndQueuedSettings() {
     Fixture blocked; blocked.fake.entities[1].model = 0;
     Check(!(blocked.ReadyNow().stateFlags & Ready), "zero model cannot establish readiness");
     Check(blocked.engine.Status().capabilities == 0, "invalid ped exposes no native capability");
+    Check(blocked.engine.Status().scriptTick == blocked.now && blocked.engine.Status().tick == 0,
+        "an invalid ped keeps a scheduler heartbeat distinct from native readiness");
 }
 void TimerMustAdvanceAndGateLossCleansUp() {
     Fixture f; f.input.settings.flags = GodMode | Invisible;
@@ -292,6 +296,7 @@ void TimerMustAdvanceAndGateLossCleansUp() {
     const auto verified = f.engine.Status().tick;
     f.now += 100; f.input.lastSeenMs = f.now; f.engine.Step(f.input, f.now);
     Check(f.engine.Status().tick == verified, "stuck native frames cannot refresh the verified frame timestamp");
+    Check(f.engine.Status().scriptTick == f.now, "a stuck game timer does not hide a live scheduler callback");
 }
 void SnapshotRestorationAndExternalChanges() {
     Fixture f; f.input.settings.flags = GodMode | Invisible;

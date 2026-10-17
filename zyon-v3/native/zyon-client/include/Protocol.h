@@ -65,6 +65,9 @@ struct ControlSnapshot {
     bool gameFocused = true;
 };
 struct RuntimeStatus {
+    // Scheduler heartbeat only. This field is never serialized or used to
+    // establish native readiness; tick records a validated native frame.
+    std::uint64_t scriptTick = 0;
     std::uint64_t tick = 0;
     std::uint64_t desiredRevision = 0;
     std::uint64_t appliedRevision = 0;

@@ -68,10 +68,29 @@ inline StatusPacket BuildStatusSnapshot(const std::uint8_t (&token)[16], const R
     if (!packet.tick || now < packet.tick || now - packet.tick > MaximumFrameAgeMilliseconds) {
         packet.stateFlags = (packet.stateFlags & ~(Ready | SettingsActive)) | Blocked;
         packet.capabilities = 0;
+        packet.appliedRevision = 0;
+        const bool sameEpoch = control.sessionEpoch != 0 && runtimeEpoch == control.sessionEpoch;
+        const bool callbackFresh = runtime.scriptTick != 0 && now >= runtime.scriptTick &&
+            now - runtime.scriptTick <= MaximumFrameAgeMilliseconds;
+        const bool currentPreflight = sameEpoch && callbackFresh && !(runtime.stateFlags & Ready) &&
+            (runtime.error == WaitingNative || runtime.error == InvalidPed || runtime.error == LeaseOrOffline);
         if (packet.error != Unavailable) {
-            packet.error = FrameStale;
-            CopyStatusMessage(packet.message,
-                "No recent game script frame. Loading, session readiness or ScriptHook policy may be involved; permission denial is not confirmed.");
+            if (!currentPreflight) {
+                packet.error = FrameStale;
+                if (!runtime.scriptTick) {
+                    CopyStatusMessage(packet.message,
+                        "ASI loaded; registered game callback has not entered. Check session readiness and ScriptHook policy; a permission denial is not confirmed.");
+                } else if (!sameEpoch) {
+                    CopyStatusMessage(packet.message,
+                        "Waiting for a registered game callback for this connection; no native execution is confirmed.");
+                } else if (!callbackFresh) {
+                    CopyStatusMessage(packet.message,
+                        "The registered game callback stopped updating; no recent native execution is confirmed. ScriptHook permission denial is not confirmed.");
+                } else {
+                    CopyStatusMessage(packet.message,
+                        "Game callback is running; no recent validated native frame is available.");
+                }
+            }
         }
     }
     if (error) {

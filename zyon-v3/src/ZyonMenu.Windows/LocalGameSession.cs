@@ -1,5 +1,4 @@
 // C# / src/ZyonMenu.Windows/LocalGameSession.cs / .NET 8 / Windows 10 x64 FiveM b3258 local backend.
-using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.InteropServices;
@@ -55,6 +54,7 @@ internal sealed class LocalGameSession : ILocalGameSession
     private int? _recoilOffset, _spreadOffset;
     private bool _hasSnapshot, _disposed;
     private int _enabled = 1;
+    private int _signatureRefreshRequested;
     private long _revision, _applied, _cursor;
     private long _lastDiscovery;
     private long _lastAimTimestamp;
@@ -74,6 +74,7 @@ internal sealed class LocalGameSession : ILocalGameSession
         get => Volatile.Read(ref _enabled) != 0;
         set
         {
+            if (value) Interlocked.Exchange(ref _signatureRefreshRequested, 1);
             Interlocked.Exchange(ref _enabled, value ? 1 : 0);
             if (!value) { _actionFence.Invalidate(); Interlocked.Increment(ref _sessionEpoch); }
         }
@@ -406,6 +407,18 @@ internal sealed class LocalGameSession : ILocalGameSession
             _ped = current;
             AddEvent("ped", "Personagem local validado; nenhuma seleção anterior foi reaplicada.");
         }
+        if (Interlocked.Exchange(ref _signatureRefreshRequested, 0) != 0)
+        {
+            // A manual verification can recover pages that were unreadable during loading.
+            // Never replace offsets while weapon fields are enabled or still owned for restoration.
+            if (_settings.Weapons.NoRecoil || _settings.Weapons.NoSpread || _originalWeaponValues.Count != 0)
+                AddEvent("signatures", "Desative No Recoil e No Spread e aguarde a restauração antes de verificar as assinaturas novamente.");
+            else
+            {
+                ResolveWeaponFields();
+                AddEvent("signatures", _signatureTelemetry.CoverageReason);
+            }
+        }
         _status = new ServerStatus
         {
             Version = AppIdentity.DisplayVersion + " / b3258", Ready = true, PlayerOnline = true, PlayerId = memory.ProcessId,
@@ -490,6 +503,7 @@ internal sealed class LocalGameSession : ILocalGameSession
             throw new InvalidOperationException("A imagem do executável não corresponde ao perfil b3258 esperado.");
         _recoilOffset = null;
         _spreadOffset = null;
+        Interlocked.Exchange(ref _signatureRefreshRequested, 0);
         ResolveWeaponFields();
         AddEvent("process", "Processo b3258 identificado; validando as estruturas antes de modificar dados.");
     }
@@ -964,55 +978,12 @@ internal sealed class LocalGameSession : ILocalGameSession
 
     private void ResolveWeaponFields()
     {
-        _signatureTelemetry = new SignatureTelemetry();
         var memory = _memory!;
-        if (!memory.TryReadBytes(memory.ModuleBase, 4096, out var header))
-        { SignatureFailure("O cabeçalho do executável não pôde ser lido."); return; }
-        if (header[0] != 'M' || header[1] != 'Z') { SignatureFailure("O cabeçalho MZ do executável não foi confirmado."); return; }
-        int pe = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(0x3C, 4));
-        if (pe < 0 || pe > 3000 || header[pe] != 'P' || header[pe + 1] != 'E')
-        { SignatureFailure("O cabeçalho PE do executável não foi confirmado."); return; }
-        int count = BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(pe + 6, 2));
-        int table = pe + 24 + BinaryPrimitives.ReadUInt16LittleEndian(header.AsSpan(pe + 20, 2));
-        var recoilPattern = BytePattern.Parse("48 8B 47 40 F3 0F 10 B0 ?? ?? ?? ??");
-        var spreadPattern = BytePattern.Parse("F3 0F 10 43 ?? F3 0F 59 05 ?? ?? ?? ?? F3 0F 2C C0");
-        var recoil = new List<int>(); var spread = new List<int>();
-        for (int section = 0; section < count && section < 96; section++)
-        {
-            int start = table + section * 40;
-            if (start > header.Length - 40) { SignatureFailure("A tabela de seções ultrapassa o cabeçalho disponível."); return; }
-            uint flags = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(start + 36, 4));
-            if ((flags & 0x20000000) == 0) continue;
-            uint size = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(start + 8, 4));
-            uint rva = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(start + 12, 4));
-            if (size == 0 || size > 32 * 1024 * 1024 || rva > memory.ImageSize || size > memory.ImageSize - rva ||
-                !memory.TryReadBytes(memory.ModuleBase + rva, (int)size, out var code))
-            { _signatureTelemetry.ExecutableSectionsSkipped++; continue; }
-            _signatureTelemetry.ExecutableSectionsRead++;
-            foreach (int match in recoilPattern.FindAll(code)) recoil.Add(BinaryPrimitives.ReadInt32LittleEndian(code.AsSpan(match + 8, 4)));
-            foreach (int match in spreadPattern.FindAll(code)) spread.Add(ExternalReadback.SignedDisplacement8(code[match + 4]));
-        }
-        _signatureTelemetry.RecoilMatchCount = recoil.Count;
-        _signatureTelemetry.SpreadMatchCount = spread.Count;
-        _signatureTelemetry.RecoilCandidates = recoil.Take(16).ToList();
-        _signatureTelemetry.SpreadCandidates = spread.Take(16).ToList();
-        _recoilOffset = ExternalReadback.UniqueFieldOffset(recoil);
-        _spreadOffset = ExternalReadback.UniqueFieldOffset(spread);
-        _signatureTelemetry.RecoilReason = SignatureReason(recoil, _recoilOffset);
-        _signatureTelemetry.SpreadReason = SignatureReason(spread, _spreadOffset);
+        var scan = ExecutableSignatureScanner.Scan(memory.ModuleBase, memory.ImageSize, memory.TryReadBytes);
+        _signatureTelemetry = scan.Telemetry;
+        _recoilOffset = scan.RecoilOffset;
+        _spreadOffset = scan.SpreadOffset;
     }
-
-    private void SignatureFailure(string reason)
-    {
-        _signatureTelemetry.RecoilReason = reason;
-        _signatureTelemetry.SpreadReason = reason;
-    }
-
-    private string SignatureReason(List<int> candidates, int? offset) => offset is not null
-        ? $"Assinatura única; deslocamento 0x{offset:X} resolvido no executável."
-        : candidates.Count > 1 ? $"Assinatura ambígua: {candidates.Count} ocorrências; campo desativado."
-        : candidates.Count == 1 ? "O deslocamento extraído está fora do intervalo permitido; campo desativado."
-        : $"Assinatura ausente nas {_signatureTelemetry.ExecutableSectionsRead} seções executáveis lidas; {_signatureTelemetry.ExecutableSectionsSkipped} seções não puderam ser analisadas.";
 
     private void SetFeature(string name, string state, string message, bool observed = false)
     {

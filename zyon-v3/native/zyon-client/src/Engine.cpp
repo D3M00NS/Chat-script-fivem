@@ -413,6 +413,7 @@ void Engine::NewEpoch(std::uint64_t epoch) {
 }
 
 void Engine::Step(const ControlSnapshot& input, std::uint64_t nowMs) {
+    status_.scriptTick = nowMs;
     status_.desiredRevision = input.settings.revision;
     status_.stateFlags = 0; status_.capabilities = 0; status_.ped = 0; status_.appliedRevision = 0;
     if (!input.connected || !input.sessionEpoch || nowMs < input.lastSeenMs || nowMs - input.lastSeenMs > LeaseMilliseconds) {

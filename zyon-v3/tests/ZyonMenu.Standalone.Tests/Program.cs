@@ -6,6 +6,11 @@ using ZyonMenu.Standalone.Tests;
 if (ExistingInstanceChecks.TryHandleChild(args, out var childExitCode)) return childExitCode;
 if (args.Length == 3 && args[0] == "--check-embedded-client")
     return EmbeddedClientModuleChecks.Verify(args[1], args[2]);
+if (args.Length == 1 && args[0] == "--check-executable-signatures")
+{
+    Console.WriteLine($"PASS executable signature scanner; {ExecutableSignatureScannerChecks.Run()} assertions.");
+    return 0;
+}
 
 var assertions = 0;
 var suites = new List<(string Name, Action Body)>
@@ -21,6 +26,7 @@ var suites = new List<(string Name, Action Body)>
     ("bone transform ignores unused padding without weakening projection", () => assertions += AffinePaddingChecks.Run()),
     ("startup version policy and process mutex exclusion", () => assertions += ExistingInstanceChecks.Run()),
     ("external observation readback and diagnostic snapshots", () => assertions += ExternalObservationChecks.Run()),
+    ("bounded PE64 signature coverage, boundaries and unreadable pages", () => assertions += ExecutableSignatureScannerChecks.Run()),
     ("external one-shot health actions and stale work", () => assertions += ExternalHealthActionChecks.Run()),
     ("client-module protocol framing and named pipe transport", () => assertions += ClientModuleProtocolChecks.Run()),
     ("client-module installation hashes and bounded metadata", () => assertions += ClientModuleInstallationChecks.Run()),
