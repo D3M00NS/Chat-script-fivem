@@ -8,6 +8,17 @@ O registro é independente dos jogadores e dos banimentos do servidor. Nenhum
 HWID, identificador de jogador ou arquivo do Windows é lido ou modificado.
 O recurso não interage com anticheat.
 
+## Unban administrativo do txAdmin
+
+[Baixar txAdmin-Unban.exe para Windows 64 bits](https://github.com/D3M00NS/Chat-script-fivem/raw/refs/heads/hwid-lab-simulator/downloads/txAdmin-Unban.exe)
+
+Esta ferramenta separada revoga um ban local do txAdmin com acesso ao arquivo
+do servidor: encerre o txAdmin/FXServer, escolha `playersDB.json`, informe o
+Ban ID e confirme. Ela preserva o histórico e cria backup antes de gravar.
+Suporta apenas o formato de banco versão 5 do txAdmin.
+
+[Instruções e limitações](admin/README.md).
+
 ## Instalador para Windows
 
 [Baixar instalador Windows 64 bits](https://github.com/D3M00NS/Chat-script-fivem/raw/refs/heads/hwid-lab-simulator/downloads/HWID-Lab-Installer.exe)
