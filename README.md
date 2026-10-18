@@ -8,6 +8,26 @@ O registro é independente dos jogadores e dos banimentos do servidor. Nenhum
 HWID, identificador de jogador ou arquivo do Windows é lido ou modificado.
 O recurso não interage com anticheat.
 
+## Instalador para Windows
+
+[Baixar instalador Windows 64 bits](https://github.com/D3M00NS/Chat-script-fivem/raw/refs/heads/hwid-lab-simulator/downloads/HWID-Lab-Installer.exe)
+· [SHA-256](downloads/SHA256SUMS.txt)
+
+O executável `HWID-Lab-Installer.exe` instala **este simulador** no seu servidor
+FiveM. Ele inclui os arquivos do recurso e funciona sem downloads adicionais.
+
+1. Abra o instalador no Windows 10/11 de 64 bits.
+2. Selecione o `server.cfg` e a pasta `resources` do mesmo servidor.
+3. Confira os caminhos e confirme a instalação.
+
+O recurso fica em `resources/[local]/hwid_lab`. Quando necessário, o instalador
+faz backup do `server.cfg` ao lado do original e adiciona `ensure hwid_lab`.
+Uma instalação existente com arquivos modificados é preservada e a operação
+é interrompida. Executar novamente com os mesmos arquivos não duplica a linha.
+
+Se o servidor já estiver aberto, execute `refresh` e `ensure hwid_lab` no
+console. Depois, use `hwidlab help`. O instalador não inicia o servidor FiveM.
+
 ## Instalar no FiveM
 
 1. Copie este repositório para `resources/[local]/hwid_lab` no seu servidor.
@@ -69,3 +89,24 @@ lua5.4 tests/fivem_smoke.lua
 Os testes verificam o ciclo de ban/unban, validação de entradas, isolamento dos
 perfis e os comandos com APIs FiveM simuladas. Não precisam de GTA V nem de um
 servidor. A validação dentro do jogo exige um servidor FiveM e um cliente.
+
+## Compilar o instalador
+
+Com Python 3 e Go 1.23 ou superior, execute na raiz do repositório:
+
+```sh
+cd installer
+go test ./...
+cd ..
+python3 scripts/build_installer.py
+```
+
+O resultado fica em `dist/HWID-Lab-Installer.exe`; o hash SHA-256 fica em
+`dist/SHA256SUMS.txt`. O build usa apenas a biblioteca padrão do Go e incorpora
+os arquivos atuais do simulador. Para escolher o compilador, use
+`python3 scripts/build_installer.py --go /caminho/para/go`.
+
+Os testes do instalador verificam extração, backup, reinstalação e preservação
+da configuração em diretórios temporários. A interface gráfica usa as APIs
+nativas do Windows e precisa ser validada no Windows. O binário não possui
+assinatura digital.
